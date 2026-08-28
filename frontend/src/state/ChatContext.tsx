@@ -17,6 +17,7 @@ import {
   type ToolCall,
 } from "../types/protocol";
 import { nextId, newSessionId } from "../lib/id";
+import { toggleTheme as toggleThemePreference } from "../lib/theme";
 import { useChatSocket } from "../hooks/useChatSocket";
 
 export interface ChatState {
@@ -68,7 +69,6 @@ type Action =
   | { type: "USER_TURN"; text: string; messageId: string; turnId: string }
   | { type: "SET_CONNECTION"; state: ConnectionState }
   | { type: "RESET_SESSION" }
-  | { type: "TOGGLE_THEME" }
   | { type: "TOGGLE_AUTO_ACCEPT" }
   | { type: "RESOLVE_PERMISSION"; permissionRequestId: string };
 
@@ -127,12 +127,6 @@ function reducer(state: ChatState, action: Action): ChatState {
         headerTitle: "Current Session",
         sessions: [{ id: newSessionId(), title: "Current Session", active: true }],
       };
-
-    case "TOGGLE_THEME": {
-      const isDark = document.documentElement.classList.toggle("dark");
-      localStorage.setItem("theme", isDark ? "dark" : "light");
-      return state;
-    }
 
     case "TOGGLE_AUTO_ACCEPT":
       return { ...state, autoAccept: !state.autoAccept };
@@ -437,12 +431,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (state.cwd) connect(state.cwd);
   }, [close, connect, state.cwd]);
 
-  const toggleTheme = useCallback(() => dispatch({ type: "TOGGLE_THEME" }), []);
+  // The theme lives in its own store (src/lib/theme.ts) so the document, React
+  // and Shiki all read one value. Keeping it out of the reducer also keeps the
+  // reducer pure under StrictMode double-invocation.
+  const toggleTheme = useCallback(() => toggleThemePreference(), []);
 
   const toggleAutoAccept = useCallback(() => dispatch({ type: "TOGGLE_AUTO_ACCEPT" }), []);
 
   useEffect(() => {
-    if (localStorage.getItem("theme") === "light") document.documentElement.classList.remove("dark");
+    // Theme initialisation lives in src/lib/theme.ts (initTheme is called once
+    // in main.tsx); this effect only restores the project folder.
     const stored = localStorage.getItem("project-folder");
     if (stored) connect(stored);
   }, [connect]);
