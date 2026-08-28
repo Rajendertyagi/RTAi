@@ -353,7 +353,10 @@
   .code-header { display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; background: var(--code-header-bg); font-size: var(--text-2xs); font-family: var(--font-mono); color: var(--muted-foreground); border-bottom: 1px solid var(--border); }
   .code-copy-btn { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 3px; color: var(--muted-foreground); transition: background var(--transition-fast), color var(--transition-fast); }
   .code-copy-btn:hover { background: var(--border); color: var(--foreground); }
-  .code-block-wrapper pre { background: transparent; padding: 10px 12px; border-radius: 0; overflow-x: auto; margin: 0; border: none; }
+  .code-lang { text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+  .code-block-wrapper pre { background: transparent; padding: 10px 12px; border-radius: 0; overflow-x: auto; margin: 0; border: none; max-width: 100%; }
+  .code-block-wrapper pre:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .code-block-wrapper pre code { display: block; white-space: pre; }
   .bubble pre code { background: transparent; padding: 0; border: none; font-size: var(--text-xs); line-height: 1.5; overflow-wrap: normal; font-family: var(--font-mono); }
   .bubble code:not(pre code) { font-family: var(--font-mono); background: var(--muted); padding: 2px 5px; border-radius: 3px; font-size: var(--text-xs); overflow-wrap: anywhere; }
   .message.user .bubble code:not(pre code) { background: color-mix(in oklab, var(--primary) 82%, black); color: var(--primary-foreground); }
