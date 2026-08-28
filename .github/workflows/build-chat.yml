@@ -35,16 +35,17 @@ jobs:
       - name: Build single-file bundle
         run: npm run build
 
-      - name: Publish chat.html
+      - name: Publish chat UI to demo1
         working-directory: ${{ github.workspace }}
         run: |
-          cp frontendn/dist/index.html backend/app/static/dist/demo/chat.html
+          mkdir -p backend/app/static/dist/demo1
+          cp frontendn/dist/index.html backend/app/static/dist/demo1/index.html
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add backend/app/static/dist/demo/chat.html
+          git add backend/app/static/dist/demo1/index.html
           if git diff --cached --quiet; then
-            echo "No changes to chat.html"
+            echo "No changes to demo1/index.html"
           else
-            git commit -m "build: update chat.html [skip ci]"
+            git commit -m "build: publish chat UI to demo1 [skip ci]"
             git push
           fi
