@@ -16,6 +16,12 @@ interface DropdownProps {
   disabledReason?: string;
 }
 
+// Model lists run into the hundreds, so offer a filter box once a list is long
+// enough to need one.
+const SEARCH_THRESHOLD = 8;
+// Cap rendered rows so a very large list stays responsive.
+const MAX_RENDERED = 100;
+
 // Self-contained, positioned dropdown. One instance per picker; no global
 // state. Add new pickers (e.g. modes) by dropping in another <Dropdown/>.
 export function Dropdown({
@@ -30,33 +36,59 @@ export function Dropdown({
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [filter, setFilter] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+
+  const showSearch = items.length > SEARCH_THRESHOLD;
+  const needle = filter.trim().toLowerCase();
+  const filtered = needle
+    ? items.filter((it) => it.label.toLowerCase().includes(needle))
+    : items;
+  const visible = filtered.slice(0, MAX_RENDERED);
+
+  const close = () => {
+    setOpen(false);
+    setFilter("");
+  };
 
   const toggle = () => {
     if (disabled) return;
     if (open) {
-      setOpen(false);
+      close();
       return;
     }
     const rect = btnRef.current?.getBoundingClientRect();
     if (rect) {
-      const height = Math.min(240, items.length * 32 + 8);
+      const height = Math.min(240, filtered.length * 32 + (showSearch ? 44 : 8));
       const top = rect.bottom + height > window.innerHeight ? rect.top - height - 4 : rect.bottom + 4;
       const left = Math.min(rect.left, window.innerWidth - 200);
       setPos({ top, left });
     }
+    setFilter("");
     setOpen(true);
   };
 
   useEffect(() => {
     if (!open) return;
+    if (showSearch) filterRef.current?.focus();
     const onDoc = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       if (!t.closest(".dropdown") && !t.closest(".ctrl-btn") && !t.closest(".model-picker")) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        close();
+      }
+    };
     document.addEventListener("click", onDoc);
-    return () => document.removeEventListener("click", onDoc);
-  }, [open]);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, showSearch]);
 
   return (
     <>
@@ -72,19 +104,44 @@ export function Dropdown({
       </button>
       {open && pos && (
         <div className="dropdown active" style={{ top: pos.top, left: pos.left }}>
+          {showSearch && (
+            <input
+              ref={filterRef}
+              className="dropdown-search"
+              type="text"
+              value={filter}
+              placeholder="Filter..."
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  close();
+                }
+              }}
+            />
+          )}
           <div className="dropdown-content">
-            {items.map((it) => (
-              <div
-                key={it.id}
-                className={`dropdown-item ${it.id === activeId ? "active" : ""}`}
-                onClick={() => {
-                  onSelect(it.id);
-                  setOpen(false);
-                }}
-              >
-                {it.label}
+            {visible.length === 0 ? (
+              <div className="dropdown-empty">No matches</div>
+            ) : (
+              visible.map((it) => (
+                <div
+                  key={it.id}
+                  className={`dropdown-item ${it.id === activeId ? "active" : ""}`}
+                  onClick={() => {
+                    onSelect(it.id);
+                    close();
+                  }}
+                >
+                  {it.label}
+                </div>
+              ))
+            )}
+            {filtered.length > visible.length && (
+              <div className="dropdown-empty">
+                {filtered.length - visible.length} more — keep typing to narrow
               </div>
-            ))}
+            )}
           </div>
         </div>
       )}

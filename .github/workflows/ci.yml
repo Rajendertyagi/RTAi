@@ -289,7 +289,7 @@ jobs:
 
   playwright-opencode-smoke:
     runs-on: windows-latest
-    needs: [backend, frontendn, packaging, integration]
+    needs: [backend, frontend, packaging, integration]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5

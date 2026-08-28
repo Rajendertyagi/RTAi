@@ -211,6 +211,27 @@ Levels always originate here — components never assume all levels exist.
 
 UI: authoritative reflection of reasoning effort.
 
+### commands_available
+
+| | |
+|---|---|
+| Direction | backend → ui |
+| Required | `commands`: array of `{id, label}` (`description?`, `input_hint?` allowed) |
+| Optional | `available` (`false` + `reason_code`/`reason_message` when the section is unavailable), envelope fields |
+
+```json
+{"protocol_version": 1, "type": "commands_available",
+ "commands": [{"id": "web", "label": "web",
+               "description": "Search the web for information",
+               "input_hint": "query to search for"}]}
+```
+
+UI: populate the `/` slash-command autocomplete. Commands are invoked as
+regular prompt text (`/name args`). The ACP adapter emits this event when the
+runtime announces `available_commands_update` after session creation; the
+server adapter announces commands during startup discovery. The list may be
+re-emitted at any time when the runtime updates it.
+
 ### user_message
 
 | | |
@@ -313,18 +334,20 @@ UI: close entry; cancelled renders distinctly; content treated as untrusted.
 | | |
 |---|---|
 | Direction | backend → ui |
-| Required | `session_id`, `turn_id`, `permission_request_id`, `tool_call_id`, `options`: `{id, label}` list (`description?` allowed) |
+| Required | `session_id`, `turn_id`, `permission_request_id`, `tool_call_id`, `options`: `{id, label}` list (`description?`, `kind?` allowed) |
 | Optional | envelope extras |
 
 ```json
 {"protocol_version": 1, "type": "permission_request",
  "session_id": "s", "turn_id": "t",
  "permission_request_id": "perm-1", "tool_call_id": "tc1",
- "options": [{"id": "allow_once", "label": "Allow once"}]}
+ "options": [{"id": "allow_once", "label": "Allow once", "kind": "allow_once"}]}
 ```
 
-UI: dialog built from the provided options. Option ids are data, never
-hard-coded in components.
+UI: dialog built from the provided options. Option `kind` (when present)
+hints at the nature of the choice — `allow_once`/`allow_always`/
+`reject_once`/`reject_always` — and lets the UI auto-approve requests when the
+user enables auto-accept. Option ids are data, never hard-coded in components.
 
 ### permission_result
 

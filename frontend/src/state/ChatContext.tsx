@@ -32,6 +32,19 @@ export interface ChatState {
   thinkingLevel: string;
   activeMessageId: string | null;
   sessions: SessionItem[];
+  // When on, incoming permission prompts are answered automatically with the
+  // option the backend marked as `kind: "allow"`.
+  autoAccept: boolean;
+}
+
+const AUTO_ACCEPT_KEY = "rtai-auto-accept";
+
+function storedAutoAccept(): boolean {
+  try {
+    return localStorage.getItem(AUTO_ACCEPT_KEY) === "on";
+  } catch {
+    return false;
+  }
 }
 
 const initialState: ChatState = {
@@ -41,12 +54,13 @@ const initialState: ChatState = {
   generating: false,
   headerTitle: "Current Session",
   messages: [],
-  capabilities: { agents: [], models: [], thinkingLevels: [], unavailable: {} },
+  capabilities: { agents: [], models: [], thinkingLevels: [], commands: [], unavailable: {} },
   selectedAgent: "",
   selectedModel: "",
   thinkingLevel: "off",
   activeMessageId: null,
   sessions: [{ id: "session-1", title: "Current Session", active: true }],
+  autoAccept: storedAutoAccept(),
 };
 
 type Action =
@@ -54,7 +68,9 @@ type Action =
   | { type: "USER_TURN"; text: string; messageId: string; turnId: string }
   | { type: "SET_CONNECTION"; state: ConnectionState }
   | { type: "RESET_SESSION" }
-  | { type: "TOGGLE_THEME" };
+  | { type: "TOGGLE_THEME" }
+  | { type: "TOGGLE_AUTO_ACCEPT" }
+  | { type: "RESOLVE_PERMISSION"; permissionRequestId: string };
 
 function appendTool(message: Message, tool: ToolCall): Message {
   const tools = message.tools ? [...message.tools] : [];
@@ -116,6 +132,19 @@ function reducer(state: ChatState, action: Action): ChatState {
       const isDark = document.documentElement.classList.toggle("dark");
       localStorage.setItem("theme", isDark ? "dark" : "light");
       return state;
+    }
+
+    case "TOGGLE_AUTO_ACCEPT":
+      return { ...state, autoAccept: !state.autoAccept };
+
+    // Hide the inline permission dialog once a choice has been sent.
+    case "RESOLVE_PERMISSION": {
+      const messages = state.messages.map((m) =>
+        m.permission && m.permission.permission_request_id === action.permissionRequestId
+          ? { ...m, permission: undefined }
+          : m,
+      );
+      return { ...state, messages };
     }
 
     case "EVENT":
@@ -192,6 +221,20 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
     case "thinking_selected":
       return { ...state, thinkingLevel: event.level };
 
+    // Slash commands. The backend re-emits this after session creation via
+    // available_commands_update, so it can arrive more than once.
+    case "commands_available": {
+      const commands = event.commands ?? [];
+      return {
+        ...state,
+        capabilities: {
+          ...state.capabilities,
+          commands,
+          unavailable: { ...state.capabilities.unavailable, commands: unavailableOf(event) },
+        },
+      };
+    }
+
     case "user_message":
       return state;
 
@@ -261,6 +304,7 @@ export interface ChatContextValue {
   setThinking: (level: string) => void;
   newSession: () => void;
   toggleTheme: () => void;
+  toggleAutoAccept: () => void;
   respondPermission: (permissionRequestId: string, optionId: string) => void;
 }
 
@@ -270,6 +314,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const { connect, send, close } = useChatSocket((e) => dispatch({ type: "EVENT", event: e }));
   const counters = useRef({ req: 0, turn: 0 });
+  // Guards against answering the same prompt twice, since this effect re-runs
+  // on every message update while auto-accept is on.
+  const autoAnswered = useRef<Set<string>>(new Set());
 
   const connectTo = useCallback(
     (folder: string) => {
@@ -367,6 +414,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         permission_request_id: permissionRequestId,
         option_id: optionId,
       });
+      dispatch({ type: "RESOLVE_PERMISSION", permissionRequestId });
     },
     [state.sessionId, send],
   );
@@ -379,11 +427,39 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const toggleTheme = useCallback(() => dispatch({ type: "TOGGLE_THEME" }), []);
 
+  const toggleAutoAccept = useCallback(() => dispatch({ type: "TOGGLE_AUTO_ACCEPT" }), []);
+
   useEffect(() => {
     if (localStorage.getItem("theme") === "light") document.documentElement.classList.remove("dark");
     const stored = localStorage.getItem("project-folder");
     if (stored) connect(stored);
   }, [connect]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_ACCEPT_KEY, state.autoAccept ? "on" : "off");
+    } catch {
+      // Storage unavailable (private mode); the in-memory toggle still works.
+    }
+  }, [state.autoAccept]);
+
+  // Answer pending permission prompts automatically. The backend tags the
+  // accepting option with kind "allow"; fall back to a label match for
+  // adapters that do not send kind.
+  useEffect(() => {
+    if (!state.autoAccept) return;
+    for (const message of state.messages) {
+      const pending = message.permission;
+      if (!pending) continue;
+      if (autoAnswered.current.has(pending.permission_request_id)) continue;
+      const allow =
+        pending.options.find((o) => o.kind === "allow") ??
+        pending.options.find((o) => /allow/i.test(o.label));
+      if (!allow) continue;
+      autoAnswered.current.add(pending.permission_request_id);
+      respondPermission(pending.permission_request_id, allow.id);
+    }
+  }, [state.autoAccept, state.messages, respondPermission]);
 
   const value: ChatContextValue = {
     state,
@@ -395,6 +471,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setThinking,
     newSession,
     toggleTheme,
+    toggleAutoAccept,
     respondPermission,
   };
 

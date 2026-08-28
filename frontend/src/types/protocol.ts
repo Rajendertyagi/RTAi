@@ -16,6 +16,11 @@ export interface CapabilityItem {
   id: string;
   label: string;
   description?: string;
+  // Permission options carry a kind ("allow" | "deny" | ...) so the UI can
+  // auto-pick the allow option when auto-accept is enabled.
+  kind?: string;
+  // Slash commands may advertise the argument they expect.
+  input_hint?: string;
 }
 
 export interface ModelCapabilities {
@@ -65,12 +70,14 @@ export interface Capabilities {
   agents: CapabilityItem[];
   models: CapabilityItem[];
   thinkingLevels: string[];
+  commands: CapabilityItem[];
   // Why a section could not be discovered. Backend omits the items array
   // entirely when a section is unavailable, so the reason is the only signal.
   unavailable: {
     agents?: Unavailable;
     models?: Unavailable;
     thinking?: Unavailable;
+    commands?: Unavailable;
   };
 }
 
@@ -90,6 +97,7 @@ export type ServerEvent =
   | { type: "model_selected"; model_id: string }
   | { type: "thinking_available"; thinking_levels?: string[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "thinking_selected"; level: string }
+  | { type: "commands_available"; commands?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "user_message"; text: string }
   | { type: "delta"; text: string; sequence?: number }
   | { type: "done"; reason?: "completed" | "cancelled" | "error" }

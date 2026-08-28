@@ -82,3 +82,12 @@ export const SendIcon = (_: IconProps) => (
     <polygon points="22 2 15 22 11 13 2 9 22 2" />
   </svg>
 );
+
+// Shield with a check — used for the auto-accept permissions toggle.
+export const AutoAcceptIcon = (_: IconProps) =>
+  svg(
+    <>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <polyline points="9 12 11 14 15 10" />
+    </>,
+  );
