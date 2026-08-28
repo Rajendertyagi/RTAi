@@ -42,6 +42,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           rm -rf backend/app/static/dist/demo1
+          mkdir -p backend/app/static/dist
           cp -r frontendn/dist backend/app/static/dist/demo1
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
