@@ -1,8 +1,8 @@
 name: Build Chat UI
 
-# Builds the React chat demo in frontendn/ and publishes the multi-file bundle
-# (index.html + assets/*.js + assets/*.css) into backend/app/static/dist/demo1/
-# (served by the backend at /demo1/). No local Node needed — GitHub is the build machine.
+# Builds the React chat app in frontendn/ directly into backend/app/static/dist/
+# (served by the backend at /). The vite config targets dist/ directly — no
+# copy step needed. No local Node needed; GitHub is the build machine.
 
 on:
   push:
@@ -30,26 +30,23 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Type check
         run: npm run typecheck
 
-      - name: Build bundle
+      - name: Build bundle (outputs to ../backend/app/static/dist)
         run: npm run build
 
-      - name: Publish chat UI to demo1
+      - name: Commit built assets
         working-directory: ${{ github.workspace }}
         run: |
-          rm -rf backend/app/static/dist/demo1
-          mkdir -p backend/app/static/dist
-          cp -r frontendn/dist backend/app/static/dist/demo1
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add backend/app/static/dist/demo1
+          git add backend/app/static/dist
           if git diff --cached --quiet; then
-            echo "No changes to demo1"
+            echo "No changes to dist"
           else
-            git commit -m "build: publish chat UI to demo1 [skip ci]"
+            git commit -m "build: publish chat UI to dist [skip ci]"
             git push
           fi
