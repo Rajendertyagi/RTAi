@@ -6,7 +6,6 @@ export function Header() {
   const { state, selectModel } = useChat();
   const { models } = state.capabilities;
   const selectedModel = models.find((m) => m.id === state.selectedModel);
-  const selectedThinking = thinkingLevels.find((l) => l === state.thinkingLevel);
 
   return (
     <header className="header">
