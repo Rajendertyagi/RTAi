@@ -1,0 +1,392 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  OPENCODE_VERSION: "1.18.21"
+  OPENCODE_ASSET: opencode-windows-x64.zip
+  OPENCODE_SHA256: "f8cc5477f478fa129ece99b550d508363ceff612f99d859042e526b13b951542"
+
+jobs:
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pip/wheels
+          key: python-pip-${{ runner.os }}-requirements-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            python-pip-${{ runner.os }}-requirements-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests/backend -t . -v
+
+      - name: Syntax check
+        run: python -m compileall backend/app backend/run.py
+
+      - name: Lint
+        run: python -m ruff check backend tests/backend --config backend/pyproject.toml
+        working-directory: .
+
+      - name: Type check
+        working-directory: backend
+        run: python -m mypy app
+
+  frontendn:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontendn/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontendn
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontendn
+        run: npm run typecheck
+
+      - name: Production build
+        working-directory: frontendn
+        run: npm run build
+
+      - name: Upload built app
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/app/static/dist/
+          if-no-files-found: warn
+
+      - name: Upload lockfile artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock-json
+          path: frontendn/package-lock.json
+          if-no-files-found: warn
+
+  integration:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    needs: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pip/wheels
+          key: python-pip-${{ runner.os }}-requirements-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            python-pip-${{ runner.os }}-requirements-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # Cache OpenCode download and extracted binary to avoid repeated downloads
+      - name: Cache OpenCode binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/opencode
+          key: opencode-${{ env.OPENCODE_VERSION }}-${{ env.OPENCODE_SHA256 }}
+          restore-keys: |
+            opencode-${{ env.OPENCODE_VERSION }}-
+
+      - name: Download OpenCode ${{ env.OPENCODE_VERSION }}
+        shell: pwsh
+        run: |
+          $url = "https://github.com/anomalyco/opencode/releases/download/v${{ env.OPENCODE_VERSION }}/${{ env.OPENCODE_ASSET }}"
+          $dest = Join-Path $env:RUNNER_TEMP "opencode"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          $zipPath = Join-Path $dest "${{ env.OPENCODE_ASSET }}"
+          if (-not (Test-Path $zipPath)) {
+            Write-Host "Downloading $url ..."
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+            Write-Host "Download complete ($(((Get-Item $zipPath).Length / 1MB).ToString('F1')) MB)."
+          } else {
+            Write-Host "Using cached OpenCode zip at $zipPath"
+          }
+
+      - name: Verify SHA-256 digest
+        shell: pwsh
+        run: |
+          $zipPath = Join-Path $env:RUNNER_TEMP "opencode\${{ env.OPENCODE_ASSET }}"
+          $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
+          $expected = "${{ env.OPENCODE_SHA256 }}".ToLower()
+          Write-Host "Actual:   $actual"
+          Write-Host "Expected: $expected"
+          if ($actual -ne $expected) {
+            Write-Error "SHA-256 mismatch!  Aborting."
+            exit 1
+          }
+          Write-Host "SHA-256 verified."
+
+      - name: Extract OpenCode binary
+        shell: pwsh
+        run: |
+          $zipPath = Join-Path $env:RUNNER_TEMP "opencode\${{ env.OPENCODE_ASSET }}"
+          $binDir = Join-Path $env:RUNNER_TEMP "opencode-bin"
+          if (-not (Test-Path $binDir)) {
+            New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+            Expand-Archive -Path $zipPath -DestinationPath $binDir -Force
+          } else {
+            Write-Host "Using cached extracted OpenCode at $binDir"
+          }
+          Get-ChildItem -Path $binDir -Recurse | ForEach-Object { Write-Host $_.FullName }
+
+      - name: Add OpenCode to PATH and verify
+        shell: pwsh
+        run: |
+          $binDir = Join-Path $env:RUNNER_TEMP "opencode-bin"
+          $env:PATH = "$binDir;$env:PATH"
+          $exe = Join-Path $binDir "opencode.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "opencode.exe not found under $binDir"
+            exit 1
+          }
+          $ver = & $exe --version 2>&1
+          Write-Host "opencode --version: $ver"
+          if ($ver -notmatch "${{ env.OPENCODE_VERSION }}") {
+            Write-Error "Version mismatch: expected ${{ env.OPENCODE_VERSION }}, got $ver"
+            exit 1
+          }
+          Write-Host "OpenCode ${{ env.OPENCODE_VERSION }} verified on PATH."
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Integration tests (credential-free)
+        shell: pwsh
+        run: |
+          $env:OPENCODE_BIN = Join-Path $env:RUNNER_TEMP "opencode-bin" "opencode.exe"
+          python -m unittest discover -s tests/integration -t . -v
+
+  packaging:
+    runs-on: windows-latest
+    needs: [backend, frontendn]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download frontend build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/app/static/dist
+
+      - name: Verify packaged frontend assets
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "backend/app/static/dist/index.html")) {
+            Write-Error "frontendn/dist not found in packaging artifact"
+            exit 1
+          }
+          Write-Host "Frontend build present at backend/app/static/dist/"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run packaging smoke tests
+        shell: pwsh
+        run: |
+          $env:OPENCODE_BIN = ""
+          python -m unittest discover -s tests/backend -t . -v -p test_packaging_smoke.py
+
+  playwright-deterministic:
+    runs-on: windows-latest
+    needs: [backend, frontendn, packaging]
+    timeout-minutes: 15
+    env:
+      RTAI_TEST_ADAPTER: fake
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pip/wheels
+          key: python-pip-${{ runner.os }}-requirements-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            python-pip-${{ runner.os }}-requirements-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Download frontend build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/app/static/dist
+
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-v1
+          restore-keys: |
+            playwright-browsers-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium
+
+      - name: Run deterministic Playwright E2E tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "backend;$env:PYTHONPATH"
+          python -m pytest tests/e2e/test_packaged_browser.py -v --tb=long --screenshot=only-on-failure --video=retain-on-failure --tracing=retain-on-failure
+        working-directory: .
+
+      - name: Upload Playwright failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-deterministic-failure
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+
+  playwright-opencode-smoke:
+    runs-on: windows-latest
+    needs: [backend, frontendn, packaging, integration]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pip/wheels
+          key: python-pip-${{ runner.os }}-requirements-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            python-pip-${{ runner.os }}-requirements-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Download frontend build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/app/static/dist
+
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium
+
+      - name: Cache OpenCode binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/opencode
+          key: opencode-${{ env.OPENCODE_VERSION }}-${{ env.OPENCODE_SHA256 }}
+          restore-keys: |
+            opencode-${{ env.OPENCODE_VERSION }}-
+
+      - name: Download OpenCode ${{ env.OPENCODE_VERSION }}
+        shell: pwsh
+        run: |
+          $url = "https://github.com/anomalyco/opencode/releases/download/v${{ env.OPENCODE_VERSION }}/${{ env.OPENCODE_ASSET }}"
+          $dest = Join-Path $env:RUNNER_TEMP "opencode"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          $zipPath = Join-Path $dest "${{ env.OPENCODE_ASSET }}"
+          if (-not (Test-Path $zipPath)) {
+            Write-Host "Downloading $url ..."
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+            Write-Host "Download complete ($(((Get-Item $zipPath).Length / 1MB).ToString('F1')) MB)."
+          } else {
+            Write-Host "Using cached OpenCode zip at $zipPath"
+          }
+
+      - name: Verify SHA-256 digest
+        shell: pwsh
+        run: |
+          $zipPath = Join-Path $env:RUNNER_TEMP "opencode\${{ env.OPENCODE_ASSET }}"
+          $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
+          $expected = "${{ env.OPENCODE_SHA256 }}".ToLower()
+          if ($actual -ne $expected) {
+            Write-Error "SHA-256 mismatch! Aborting."
+            exit 1
+          }
+
+      - name: Extract OpenCode binary
+        shell: pwsh
+        run: |
+          $zipPath = Join-Path $env:RUNNER_TEMP "opencode\${{ env.OPENCODE_ASSET }}"
+          $binDir = Join-Path $env:RUNNER_TEMP "opencode-bin"
+          if (-not (Test-Path $binDir)) {
+            New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+            Expand-Archive -Path $zipPath -DestinationPath $binDir -Force
+          } else {
+            Write-Host "Using cached extracted OpenCode at $binDir"
+          }
+
+      - name: Add OpenCode to PATH
+        shell: pwsh
+        run: |
+          $binDir = Join-Path $env:RUNNER_TEMP "opencode-bin"
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Run OpenCode browser smoke test
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "backend;$env:PYTHONPATH"
+          $env:OPENCODE_BIN = Join-Path $env:RUNNER_TEMP "opencode-bin" "opencode.exe"
+          python -m pytest tests/e2e/test_opencode_smoke.py -v --tb=long --screenshot=only-on-failure --video=retain-on-failure --tracing=retain-on-failure
+        working-directory: .
+
+      - name: Upload Playwright failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-opencode-smoke-failure
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
