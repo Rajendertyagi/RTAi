@@ -1,34 +1,41 @@
 /**
- * Lazy Shiki singleton.
+ * Lazy Shiki singleton, built from the **fine-grained bundle**.
  *
- * Shiki is pulled in with a dynamic `import()` so Vite emits it as its own
- * chunk, fetched only when a *completed* message actually contains a fenced
- * code block. The chat bundle itself holds no Shiki code.
+ * Everything Shiki-related is reached through dynamic `import()`, so Vite puts
+ * it in its own chunks which are fetched only when a *completed* message
+ * actually contains a fenced code block. The chat bundle holds no Shiki code.
  *
- * One highlighter is created and reused for the whole app: Shiki's own docs
- * warn instances are expensive and must be long-lived singletons, never
- * created per call site.
+ * Why fine-grained rather than the `shiki` full bundle: importing `shiki`
+ * pulls a dynamic-import map of every bundled grammar, and Vite emits a chunk
+ * for each one. That produced 311 emitted assets (~10 MB) even though only a
+ * handful could ever load. Importing grammars and themes explicitly means only
+ * the ones we actually use are emitted.
  *
- * Verified against Shiki 4.4.3 (https://shiki.style/guide/install):
- *   - `createHighlighter({ themes, langs })` is the singleton factory
- *   - `highlighter.codeToTokens(code, { lang, theme })` returns token lines
- *   - every language/theme id below is a bundled id per shiki.style/languages
- *     and shiki.style/themes
+ * One highlighter is created and reused: Shiki's docs warn instances are
+ * expensive and must be long-lived singletons.
+ *
+ * Verified against Shiki 4.4.3 published types:
+ *   - `shiki/core` exports `createHighlighterCore`
+ *   - `shiki/engine/oniguruma` exports `createOnigurumaEngine`
+ *   - `highlighter.codeToTokens()` is synchronous and returns `TokensResult`
+ *     (tokens / fg / bg)
+ *   - `ThemedToken` carries content, color, bgColor, fontStyle
+ *   - @shikijs/langs and @shikijs/themes expose `./<id>` subpaths
  */
 
-// Type-only reference. Erased at compile time, so it drags in no runtime code
-// and does not defeat the dynamic import below.
-type ShikiModule = typeof import("shiki");
+// Type-only references. Erased at compile time, so they drag in no runtime
+// code and do not defeat the dynamic imports below.
+type CoreModule = typeof import("shiki/core");
 
-export type Highlighter = Awaited<ReturnType<ShikiModule["createHighlighter"]>>;
+export type Highlighter = Awaited<ReturnType<CoreModule["createHighlighterCore"]>>;
 
-// Also type-only: `codeToTokens` is typed against BundledLanguage, so our
-// normalised ids have to carry that type or the call will not compile.
+// `codeToTokens` is typed against the language union, so normalised ids have
+// to carry this type or the call will not compile.
 import type { BundledLanguage } from "shiki";
 
 /**
  * Sentinel for "no highlighting". Shiki accepts "text" at runtime but it is
- * not part of the BundledLanguage union, so it cannot be preloaded - we treat
+ * not part of the BundledLanguage union, so it cannot be preloaded. We treat
  * it as a bypass rather than a grammar.
  */
 export const PLAIN_TEXT = "text" as const;
@@ -36,13 +43,9 @@ export const PLAIN_TEXT = "text" as const;
 export type NormalizedLanguage = BundledLanguage | typeof PLAIN_TEXT;
 
 /**
- * Deliberately small, chat-oriented language set. Loading every grammar would
- * mean hundreds of chunks; these cover the languages that actually show up in
- * coding-chat output.
- *
- * "text" is deliberately absent: Shiki treats it as a runtime special case and
- * it is NOT part of the BundledLanguage union, so it cannot be preloaded.
- * Unknown languages bypass Shiki entirely (see CodeBlock).
+ * Deliberately small, chat-oriented language set. These cover the languages
+ * that actually show up in coding-chat output; loading every grammar would mean
+ * hundreds of chunks.
  */
 export const SHIKI_LANGUAGES = [
   "shellscript",
@@ -115,11 +118,6 @@ const LANGUAGE_ALIASES: Record<string, string> = {
 
 const LOADED = new Set<string>(SHIKI_LANGUAGES);
 
-/**
- * Normalise an untrusted fence language to a loaded Shiki id, else "text".
- * Only characters from a conservative set are considered, and the result is
- * never used as a CSS class or HTML fragment.
- */
 export function normalizeLanguage(raw: string | null | undefined): NormalizedLanguage {
   if (typeof raw !== "string") return PLAIN_TEXT;
   const key = raw.trim().toLowerCase();
@@ -127,6 +125,27 @@ export function normalizeLanguage(raw: string | null | undefined): NormalizedLan
   const mapped = LANGUAGE_ALIASES[key];
   return (mapped && LOADED.has(mapped) ? mapped : PLAIN_TEXT) as NormalizedLanguage;
 }
+
+/** Grammar modules, one dynamic import each. */
+const LANGUAGE_LOADERS: Record<string, () => Promise<{ default: unknown }>> = {
+  shellscript: () => import("@shikijs/langs/shellscript"),
+  powershell: () => import("@shikijs/langs/powershell"),
+  python: () => import("@shikijs/langs/python"),
+  javascript: () => import("@shikijs/langs/javascript"),
+  typescript: () => import("@shikijs/langs/typescript"),
+  jsx: () => import("@shikijs/langs/jsx"),
+  tsx: () => import("@shikijs/langs/tsx"),
+  json: () => import("@shikijs/langs/json"),
+  html: () => import("@shikijs/langs/html"),
+  css: () => import("@shikijs/langs/css"),
+  markdown: () => import("@shikijs/langs/markdown"),
+};
+
+/** Theme modules. Both load together so switching never reinitialises. */
+const THEME_LOADERS: Record<ShikiTheme, () => Promise<{ default: unknown }>> = {
+  "github-light": () => import("@shikijs/themes/github-light"),
+  "github-dark": () => import("@shikijs/themes/github-dark"),
+};
 
 let pending: Promise<Highlighter> | null = null;
 
@@ -136,17 +155,26 @@ let pending: Promise<Highlighter> | null = null;
  */
 export function loadHighlighter(): Promise<Highlighter> {
   if (!pending) {
-    pending = import("shiki")
-      .then(({ createHighlighter }) =>
-        createHighlighter({
-          themes: [...SHIKI_THEMES],
-          langs: [...SHIKI_LANGUAGES],
-        }),
-      )
-      .catch((error: unknown) => {
-        pending = null;
-        throw error;
+    pending = (async () => {
+      const [{ createHighlighterCore }, { createOnigurumaEngine }] = await Promise.all([
+        import("shiki/core"),
+        import("shiki/engine/oniguruma"),
+      ]);
+
+      const [themes, langs] = await Promise.all([
+        Promise.all(Object.values(THEME_LOADERS).map((load) => load())),
+        Promise.all(Object.values(LANGUAGE_LOADERS).map((load) => load())),
+      ]);
+
+      return createHighlighterCore({
+        themes: themes.map((module) => module.default),
+        langs: langs.map((module) => module.default),
+        engine: createOnigurumaEngine(import("shiki/wasm")),
       });
+    })().catch((error: unknown) => {
+      pending = null;
+      throw error;
+    });
   }
   return pending;
 }
