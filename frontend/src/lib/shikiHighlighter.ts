@@ -27,12 +27,24 @@ export type Highlighter = Awaited<ReturnType<ShikiModule["createHighlighter"]>>;
 import type { BundledLanguage } from "shiki";
 
 /**
+ * Sentinel for "no highlighting". Shiki accepts "text" at runtime but it is
+ * not part of the BundledLanguage union, so it cannot be preloaded - we treat
+ * it as a bypass rather than a grammar.
+ */
+export const PLAIN_TEXT = "text" as const;
+
+export type NormalizedLanguage = BundledLanguage | typeof PLAIN_TEXT;
+
+/**
  * Deliberately small, chat-oriented language set. Loading every grammar would
  * mean hundreds of chunks; these cover the languages that actually show up in
  * coding-chat output.
+ *
+ * "text" is deliberately absent: Shiki treats it as a runtime special case and
+ * it is NOT part of the BundledLanguage union, so it cannot be preloaded.
+ * Unknown languages bypass Shiki entirely (see CodeBlock).
  */
 export const SHIKI_LANGUAGES = [
-  "text",
   "shellscript",
   "powershell",
   "python",
@@ -108,12 +120,12 @@ const LOADED = new Set<string>(SHIKI_LANGUAGES);
  * Only characters from a conservative set are considered, and the result is
  * never used as a CSS class or HTML fragment.
  */
-export function normalizeLanguage(raw: string | null | undefined): BundledLanguage {
-  if (typeof raw !== "string") return "text";
+export function normalizeLanguage(raw: string | null | undefined): NormalizedLanguage {
+  if (typeof raw !== "string") return PLAIN_TEXT;
   const key = raw.trim().toLowerCase();
   if (LOADED.has(key)) return key as BundledLanguage;
   const mapped = LANGUAGE_ALIASES[key];
-  return (mapped && LOADED.has(mapped) ? mapped : "text") as BundledLanguage;
+  return (mapped && LOADED.has(mapped) ? mapped : PLAIN_TEXT) as NormalizedLanguage;
 }
 
 let pending: Promise<Highlighter> | null = null;

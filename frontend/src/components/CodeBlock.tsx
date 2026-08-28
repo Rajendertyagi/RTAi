@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   LANGUAGE_LABELS,
+  PLAIN_TEXT,
   loadHighlighter,
   normalizeLanguage,
   shikiThemeFor,
@@ -75,6 +76,13 @@ export function CodeBlock({ code, language, complete, scheme }: CodeBlockProps) 
     // While the message is still streaming we render plain text only: calling
     // Shiki on every delta would tokenise the same block hundreds of times.
     if (!complete) {
+      setHighlighted(null);
+      return;
+    }
+
+    // Unknown or absent language: plain text has no grammar to load, so skip
+    // Shiki entirely rather than asking it for a language it cannot preload.
+    if (lang === PLAIN_TEXT) {
       setHighlighted(null);
       return;
     }
