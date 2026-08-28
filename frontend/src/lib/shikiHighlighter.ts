@@ -33,6 +33,9 @@ export type Highlighter = Awaited<ReturnType<CoreModule["createHighlighterCore"]
 // to carry this type or the call will not compile.
 import type { BundledLanguage } from "shiki";
 
+// Re-exported by shiki/core from @shikijs/types.
+import type { LanguageInput, ThemeInput } from "shiki/core";
+
 /**
  * Sentinel for "no highlighting". Shiki accepts "text" at runtime but it is
  * not part of the BundledLanguage union, so it cannot be preloaded. We treat
@@ -167,8 +170,10 @@ export function loadHighlighter(): Promise<Highlighter> {
       ]);
 
       return createHighlighterCore({
-        themes: themes.map((module) => module.default),
-        langs: langs.map((module) => module.default),
+        // The grammar/theme modules are typed as unknown at the import
+        // boundary; they satisfy LanguageInput / ThemeInput at runtime.
+        themes: themes.map((module) => module.default) as unknown as ThemeInput[],
+        langs: langs.map((module) => module.default) as unknown as LanguageInput[],
         engine: createOnigurumaEngine(import("shiki/wasm")),
       });
     })().catch((error: unknown) => {
