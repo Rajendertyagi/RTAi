@@ -1,32 +1,27 @@
 import { useChat } from "../state/ChatContext";
-import { Dropdown } from "./Dropdown";
 import { ModelIcon } from "./Icons";
 
 export function Header() {
-  const { state, selectModel } = useChat();
-  const { models } = state.capabilities;
+  const { state } = useChat();
+  const { models, unavailable } = state.capabilities;
   const selectedModel = models.find((m) => m.id === state.selectedModel);
+
+  // Read-only on purpose: the interactive Agent/Model/Thinking pickers all live
+  // together in the composer footer. This chip only reports the current model.
+  const label = selectedModel?.label ?? (unavailable.models ? "Models unavailable" : "No model");
+  const title = unavailable.models
+    ? `${unavailable.models.message} (${unavailable.models.code})`
+    : "Selected model";
 
   return (
     <header className="header">
       <div className="header-title" id="headerTitle">
         {state.headerTitle || "Current Session"}
       </div>
-      <div className="header-controls">
-        <Dropdown
-          className="model-picker"
-          title="Select model"
-          trigger={
-            <>
-              <ModelIcon />
-              <span id="modelName">{selectedModel?.label ?? "Select Model"}</span>
-            </>
-          }
-          items={models}
-          activeId={state.selectedModel}
-          onSelect={selectModel}
-        />
-      </div>
+      <span className="model-chip" id="modelName" title={title}>
+        <ModelIcon />
+        <span>{label}</span>
+      </span>
     </header>
   );
 }

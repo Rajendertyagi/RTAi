@@ -38,6 +38,14 @@ export function Composer() {
   const selectedAgent = agents.find((a) => a.id === state.selectedAgent);
   const selectedModel = models.find((m) => m.id === state.selectedModel);
 
+  // When the backend marks a section unavailable it sends no items at all, so
+  // surface its reason rather than leaving a dead, silent control behind.
+  const reasonFor = (section: "agents" | "models" | "thinking") => {
+    const why = state.capabilities.unavailable[section];
+    if (why) return `${why.message} (${why.code})`;
+    return `No ${section === "thinking" ? "thinking levels" : section} available. Connect to a project folder first.`;
+  };
+
   return (
     <div className="composer">
       <div className="composer-card">
@@ -70,6 +78,8 @@ export function Composer() {
             )}
             <Dropdown
               title="Agent"
+              disabled={agents.length === 0}
+              disabledReason={reasonFor("agents")}
               trigger={
                 <>
                   <AgentIcon />
@@ -82,6 +92,8 @@ export function Composer() {
             />
             <Dropdown
               title="Model"
+              disabled={models.length === 0}
+              disabledReason={reasonFor("models")}
               trigger={
                 <>
                   <ModelIcon />
@@ -94,6 +106,8 @@ export function Composer() {
             />
             <Dropdown
               title="Thinking"
+              disabled={thinkingLevels.length === 0}
+              disabledReason={reasonFor("thinking")}
               trigger={
                 <>
                   <ThinkingIcon />

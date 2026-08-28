@@ -41,7 +41,7 @@ const initialState: ChatState = {
   generating: false,
   headerTitle: "Current Session",
   messages: [],
-  capabilities: { agents: [], models: [], thinkingLevels: [] },
+  capabilities: { agents: [], models: [], thinkingLevels: [], unavailable: {} },
   selectedAgent: "",
   selectedModel: "",
   thinkingLevel: "off",
@@ -62,6 +62,20 @@ function appendTool(message: Message, tool: ToolCall): Message {
   if (idx >= 0) tools[idx] = { ...tools[idx], ...tool };
   else tools.push(tool);
   return { ...message, tools };
+}
+
+// A capability section can arrive with `available:false` and no items array at
+// all. Capture the reason so the UI can explain itself instead of going blank.
+function unavailableOf(event: {
+  available?: boolean;
+  reason_code?: string;
+  reason_message?: string;
+}) {
+  if (event.available !== false) return undefined;
+  return {
+    code: event.reason_code ?? "unavailable",
+    message: event.reason_message ?? "Not available.",
+  };
 }
 
 function reducer(state: ChatState, action: Action): ChatState {
@@ -129,21 +143,31 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
         ],
       };
 
-    case "agents_available":
-      if (!event.agents) return state;
+    case "agents_available": {
+      const agents = event.agents ?? [];
       return {
         ...state,
-        capabilities: { ...state.capabilities, agents: event.agents },
-        selectedAgent: state.selectedAgent || event.agents[0]?.id || "",
+        capabilities: {
+          ...state.capabilities,
+          agents,
+          unavailable: { ...state.capabilities.unavailable, agents: unavailableOf(event) },
+        },
+        selectedAgent: state.selectedAgent || agents[0]?.id || "",
       };
+    }
 
-    case "models_available":
-      if (!event.models) return state;
+    case "models_available": {
+      const models = event.models ?? [];
       return {
         ...state,
-        capabilities: { ...state.capabilities, models: event.models },
-        selectedModel: state.selectedModel || event.models[0]?.id || "",
+        capabilities: {
+          ...state.capabilities,
+          models,
+          unavailable: { ...state.capabilities.unavailable, models: unavailableOf(event) },
+        },
+        selectedModel: state.selectedModel || models[0]?.id || "",
       };
+    }
 
     case "agent_selected":
       return { ...state, selectedAgent: event.agent_id };
@@ -152,10 +176,17 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       return { ...state, selectedModel: event.model_id };
 
     case "thinking_available": {
-      if (!event.thinking_levels) return state;
-      const levels = event.thinking_levels;
+      const levels = event.thinking_levels ?? [];
       const level = levels.includes(state.thinkingLevel) ? state.thinkingLevel : levels[0] ?? "off";
-      return { ...state, capabilities: { ...state.capabilities, thinkingLevels: levels }, thinkingLevel: level };
+      return {
+        ...state,
+        capabilities: {
+          ...state.capabilities,
+          thinkingLevels: levels,
+          unavailable: { ...state.capabilities.unavailable, thinking: unavailableOf(event) },
+        },
+        thinkingLevel: level,
+      };
     }
 
     case "thinking_selected":

@@ -56,10 +56,22 @@ export interface Message {
   permission?: PermissionRequest;
 }
 
+export interface Unavailable {
+  code: string;
+  message: string;
+}
+
 export interface Capabilities {
   agents: CapabilityItem[];
   models: CapabilityItem[];
   thinkingLevels: string[];
+  // Why a section could not be discovered. Backend omits the items array
+  // entirely when a section is unavailable, so the reason is the only signal.
+  unavailable: {
+    agents?: Unavailable;
+    models?: Unavailable;
+    thinking?: Unavailable;
+  };
 }
 
 export interface SessionItem {

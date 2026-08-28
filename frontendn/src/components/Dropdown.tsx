@@ -12,16 +12,28 @@ interface DropdownProps {
   onSelect: (id: string) => void;
   className?: string;
   title?: string;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 // Self-contained, positioned dropdown. One instance per picker; no global
 // state. Add new pickers (e.g. modes) by dropping in another <Dropdown/>.
-export function Dropdown({ trigger, items, activeId, onSelect, className = "ctrl-btn", title }: DropdownProps) {
+export function Dropdown({
+  trigger,
+  items,
+  activeId,
+  onSelect,
+  className = "ctrl-btn",
+  title,
+  disabled = false,
+  disabledReason,
+}: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
 
   const toggle = () => {
+    if (disabled) return;
     if (open) {
       setOpen(false);
       return;
@@ -48,7 +60,14 @@ export function Dropdown({ trigger, items, activeId, onSelect, className = "ctrl
 
   return (
     <>
-      <button ref={btnRef} className={className} onClick={toggle} title={title} type="button">
+      <button
+        ref={btnRef}
+        className={`${className}${disabled ? " is-disabled" : ""}`}
+        onClick={toggle}
+        title={disabled ? disabledReason : title}
+        disabled={disabled}
+        type="button"
+      >
         {trigger}
       </button>
       {open && pos && (
