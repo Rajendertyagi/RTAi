@@ -69,8 +69,8 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 | Feature | Status |
 |---|---|
 | Tool timeline UI | complete |
-| Permission dialog returning real outcomes | in progress |
-| Slash-command autocomplete (`commands_available`) | in progress |
+| Permission dialog returning real outcomes | complete |
+| Slash-command autocomplete (`commands_available`) | complete |
 | Permission result contract tests | planned |
 
 ## Phase 5 — SQLite session history

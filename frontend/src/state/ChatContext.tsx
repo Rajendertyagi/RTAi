@@ -288,6 +288,18 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       return { ...state, messages };
     }
 
+    // Backend echo of a resolved permission. The dialog is already cleared
+    // optimistically when the response is sent; this is an idempotent backup
+    // for requests resolved outside this client.
+    case "permission_result": {
+      const messages = state.messages.map((m) =>
+        m.permission && m.permission.permission_request_id === event.permission_request_id
+          ? { ...m, permission: undefined }
+          : m,
+      );
+      return { ...state, messages };
+    }
+
     case "raw":
     default:
       return state;
@@ -443,9 +455,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [state.autoAccept]);
 
-  // Answer pending permission prompts automatically. The backend tags the
-  // accepting option with kind "allow"; fall back to a label match for
-  // adapters that do not send kind.
+  // Answer pending permission prompts automatically. The backend forwards the
+  // ACP option kind verbatim ("allow_once" | "allow_always" | "reject_once" |
+  // "reject_always"); fall back to a label match for adapters that omit kind.
   useEffect(() => {
     if (!state.autoAccept) return;
     for (const message of state.messages) {
@@ -453,7 +465,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (!pending) continue;
       if (autoAnswered.current.has(pending.permission_request_id)) continue;
       const allow =
-        pending.options.find((o) => o.kind === "allow") ??
+        pending.options.find((o) => o.kind?.startsWith("allow")) ??
         pending.options.find((o) => /allow/i.test(o.label));
       if (!allow) continue;
       autoAnswered.current.add(pending.permission_request_id);

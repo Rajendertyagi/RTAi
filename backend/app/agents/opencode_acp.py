@@ -54,11 +54,6 @@ def _permission_option(option: Any, index: int) -> dict[str, str]:
     return item
 
 
-def _command_item(command: Any) -> dict[str, str]:
-    """Map a CommandDescriptor to a Protocol v1 command item."""
-    return command_item(command)
-
-
 class OpenCodeSession(AgentAdapter):
     """Adapter around the official ACP Python SDK for one OpenCode child.
 
@@ -449,7 +444,7 @@ class OpenCodeSession(AgentAdapter):
             {
                 "type": "commands_available",
                 "available": True,
-                "commands": [_command_item(c) for c in self._capabilities.commands.items],
+                "commands": [command_item(c) for c in self._capabilities.commands.items],
             }
         )
 

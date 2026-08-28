@@ -104,6 +104,7 @@ export type ServerEvent =
   | { type: "tool_start"; tool_call_id: string; title: string; status?: ToolStatus }
   | { type: "tool_result"; tool_call_id: string; status: ToolStatus; content?: unknown }
   | { type: "permission_request"; permission_request_id: string; tool_call_id: string; options: CapabilityItem[] }
+  | { type: "permission_result"; permission_request_id: string; option_id?: string }
   | { type: "raw"; event: string; data: unknown };
 
 export function isServerEvent(value: unknown): value is ServerEvent {
