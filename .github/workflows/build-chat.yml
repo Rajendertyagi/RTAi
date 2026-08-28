@@ -1,0 +1,50 @@
+name: Build Chat UI
+
+# Builds the React chat demo in frontendn/ and publishes a single self-contained
+# chat.html into backend/app/static/dist/demo/ (the file the backend serves).
+# No local Node needed — GitHub is the build machine.
+
+on:
+  push:
+    branches: [feat/react-chat]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontendn
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build single-file bundle
+        run: npm run build
+
+      - name: Publish chat.html
+        working-directory: ${{ github.workspace }}
+        run: |
+          cp frontendn/dist/index.html backend/app/static/dist/demo/chat.html
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add backend/app/static/dist/demo/chat.html
+          if git diff --cached --quiet; then
+            echo "No changes to chat.html"
+          else
+            git commit -m "build: update chat.html [skip ci]"
+            git push
+          fi
