@@ -10,7 +10,6 @@ import {
 import {
   PROTOCOL_VERSION,
   type Capabilities,
-  type ClientCommand,
   type ConnectionState,
   type Message,
   type ServerEvent,
@@ -180,7 +179,7 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
     case "done": {
       if (!state.activeMessageId) return { ...state, generating: false };
       const messages = state.messages.map((m) =>
-        m.id === state.activeMessageId ? { ...m, status: "complete" } : m,
+        m.id === state.activeMessageId ? { ...m, status: "complete" as const } : m,
       );
       return { ...state, messages, generating: false, activeMessageId: null };
     }

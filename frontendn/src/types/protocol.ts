@@ -35,7 +35,7 @@ export interface AttachmentRef {
 
 export interface ToolCall {
   id: string;
-  title: string;
+  title?: string;
   status: ToolStatus;
   content?: unknown;
 }
