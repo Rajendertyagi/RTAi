@@ -4,13 +4,13 @@
 
 Every test in this repository lives under the repository-level `tests/` tree —
 never beside production code, and never in extra test folders under
-`backend/`, `frontendn/`, or feature directories. Production code stays only in
-`backend/` and `frontendn/src/`.
+`backend/`, `frontend/`, or feature directories. Production code stays only in
+`backend/` and `frontend/src/`.
 
 ```text
 tests/
 ├── backend/       # Python unit tests (unittest)
-├── frontendn/     # React/TypeScript unit tests (vitest)
+├── frontend/     # React/TypeScript unit tests (vitest)
 ├── integration/   # cross-component suites (backend+frontend contract, Phase 2+)
 ├── e2e/           # browser E2E (Playwright, Phase 8)
 ├── fixtures/      # shared static test data
@@ -23,9 +23,9 @@ tests/
 |---|---|---|---|
 | Python unit tests (protocol helpers) | unittest (stdlib) | `tests/backend/` | active |
 | Backend lint / types | ruff, mypy | `backend/pyproject.toml` | configured |
-| Frontend unit tests | vitest | `tests/frontendn/` | planned |
+| Frontend unit tests | vitest | `tests/frontend/` | planned |
 | Real OpenCode compatibility (credential-free) | unittest + real binary | `tests/integration/` | active (CI on `windows-latest`) |
-| Component tests | vitest + browser env | `tests/frontendn/` | Phase 8 (logic covered by unit tests today) |
+| Component tests | vitest + browser env | `tests/frontend/` | Phase 8 (logic covered by unit tests today) |
 | WebSocket contract tests | pytest + FastAPI TestClient | `tests/integration/` | Phase 2B |
 | Mock-agent tests | Fake AgentAdapter | `tests/mocks/` + `tests/integration/` | Phase 2B |
 | Windows compatibility | CI on Windows runner + local scripts | – | ongoing |
@@ -42,9 +42,9 @@ Node 22 LTS); no local Node installation is required.
   `backend/` onto `sys.path` so `app.*` imports resolve from anywhere).
 - Backend lint covers the relocated tests too:
   `python -m ruff check backend tests/backend --config backend/pyproject.toml`.
-- Frontend: one `*.test.ts` per module under `tests/frontendn/`; vitest picks
-  them up via `include` in `frontendn/vite.config.ts`. Contract changes require
-  updating `docs/EVENT_PROTOCOL.md`, `frontendn/src/types/protocol.ts`, and the
+- Frontend: one `*.test.ts` per module under `tests/frontend/`; vitest picks
+  them up via `include` in `frontend/vite.config.ts`. Contract changes require
+  updating `docs/EVENT_PROTOCOL.md`, `frontend/src/types/protocol.ts`, and the
   contract tests in the same change.
 
 ## Real OpenCode integration tests (`tests/integration/`)

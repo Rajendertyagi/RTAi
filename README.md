@@ -9,7 +9,7 @@ adapter, not the core.
 
 Phase 0 (repository foundation) complete — see `docs/ROADMAP.md`.
 The legacy Deep Chat POC is preserved under `backend/app/static` and is
-**temporary/legacy**; the React frontendn UI replaces it.
+**temporary/legacy**; the React frontend UI replaces it.
 
 ## Architecture in one line
 
@@ -47,7 +47,7 @@ PowerShell alternative from repo root: `scripts/dev.ps1`.
 cd backend && python -m unittest discover -s tests -t . -v
 
 # frontend (requires Node)
-cd frontendn && npm install && npm run dev
+cd frontend && npm install && npm run dev
 ```
 
 Full commands: `docs/DEVELOPMENT.md`. Testing strategy: `docs/TESTING.md`.
@@ -56,7 +56,7 @@ Full commands: `docs/DEVELOPMENT.md`. Testing strategy: `docs/TESTING.md`.
 
 ```
 backend/    FastAPI app, AgentAdapter + OpenCode ACP adapter, tests
-frontendn/   React+Vite+TypeScript chat app
+frontend/   React+Vite+TypeScript chat app
 docs/       product, architecture, event protocol, UI spec, dev, testing, roadmap, ADRs
 scripts/    cross-platform dev/test helpers
 ```
@@ -68,7 +68,7 @@ scripts/    cross-platform dev/test helpers
 | [PRODUCT](docs/PRODUCT.md) | problem, use cases, non-goals |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | layers, lifecycles, boundaries |
 | [EVENT_PROTOCOL](docs/EVENT_PROTOCOL.md) | normalized WS event contract |
-| [UI_SPEC](docs/UI_SPEC.md) | legacy Loquix UI structure (superseded by frontendn) |
+| [UI_SPEC](docs/UI_SPEC.md) | legacy Loquix UI structure (superseded by frontend) |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | setup & commands (Windows/Linux) |
 | [TESTING](docs/TESTING.md) | test layers & conventions |
 | [ROADMAP](docs/ROADMAP.md) | phased plan with statuses |

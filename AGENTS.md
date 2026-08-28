@@ -14,13 +14,13 @@ Instructions for coding agents working in this repository.
   `backend/app/agents/base.py` (`AgentAdapter`), never on the ACP SDK directly.
 - **Never hard-code model or mode lists** anywhere in backend or frontend.
 - **Keep UI separate from transport**: components import `Transport` from
-  `frontendn/src/transport/transport.ts`; never instantiate WebSocket directly.
+  `frontend/src/transport/transport.ts`; never instantiate WebSocket directly.
 - Do not silently change protocol payloads. Any event change requires:
-  update to `docs/EVENT_PROTOCOL.md` + `frontendn/src/types/protocol.ts` + tests,
+  update to `docs/EVENT_PROTOCOL.md` + `frontend/src/types/protocol.ts` + tests,
   and only additive/optional fields unless a breaking change is agreed.
 - **Add or update tests** for every behavioural change.
   Python: `python -m unittest discover -s tests/backend -t .` (repo root)
-  Frontend: `cd frontendn && npm run test`.
+  Frontend: `cd frontend && npm run test`.
 - **Windows support is mandatory**: use `pathlib`, avoid POSIX-only process
   handling, keep the `sys.path` bootstrap in `backend/run.py` (safe-path Pythons).
 - **OpenCode process ownership** (see docs/adr/0006): manage ONLY the exact
@@ -51,7 +51,7 @@ All tests live in the repository-level `tests/` tree:
 ```text
 tests/
 ├── backend/
-├── frontendn/
+├── frontend/
 ├── integration/
 ├── e2e/
 ├── fixtures/
@@ -59,15 +59,15 @@ tests/
 ```
 
 - Every new test goes inside `/tests`: Python units in `tests/backend/`,
-  frontendn units in `tests/frontendn/`, cross-component suites in
+  frontend units in `tests/frontend/`, cross-component suites in
   `tests/integration/`, browser E2E (Playwright) in `tests/e2e/`, shared
   static data in `tests/fixtures/`, shared fakes (fake adapters/transports)
   in `tests/mocks/`.
 - Never place `*.test.ts`, `*.spec.ts`, `test_*.py`, fixtures, or mocks beside
   production files.
-- Never create additional test folders under `backend/`, `frontendn/`, or any
+- Never create additional test folders under `backend/`, `frontend/`, or any
   feature directory.
-- Production code lives only under `backend/` and `frontendn/src/`.
+- Production code lives only under `backend/` and `frontend/src/`.
 
 ## Process
 

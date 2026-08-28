@@ -19,7 +19,7 @@ graph TD
     ACP --> PROC[opencode acp process]
 ```
 
-- `frontendn/src` never imports WebSocket globals directly; only `hooks/useChatSocket.ts` does.
+- `frontend/src` never imports WebSocket globals directly; only `hooks/useChatSocket.ts` does.
 - Backend application code depends on `AgentAdapter`, never on the ACP SDK or OpenCode.
 - Phase 2A-A foundation: `base.py` is an ABC with capability snapshots and
   owned-process access (`capabilities.py`, `owned_process.py`, ADR-0007);

@@ -3,7 +3,7 @@
 Version **1**. Every message exchanged over the WebSocket — both directions —
 is a single JSON object carrying `protocol_version` and `type`, plus optional
 correlation fields. The frontend mirror of these shapes lives in
-`frontendn/src/types/protocol.ts`.
+`frontend/src/types/protocol.ts`.
 
 ## Envelope
 
@@ -468,7 +468,7 @@ yields a successful no-op acknowledgement.
 
 # Testing notes
 
-Contract tests live under `tests/frontendn/` (never beside production files).
+Contract tests live under `tests/frontend/` (never beside production files).
 Coverage includes: version gating, session/turn isolation, message
 correlation, ordered/duplicate deltas, unknown-event tolerance, raw typing,
 capabilities, model-specific thinking levels, attachment metadata, tool

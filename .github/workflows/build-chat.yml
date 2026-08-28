@@ -1,6 +1,6 @@
 name: Build Chat UI
 
-# Builds the React chat app in frontendn/ directly into backend/app/static/dist/
+# Builds the React chat app in frontend/ directly into backend/app/static/dist/
 # (served by the backend at /). The vite config targets dist/ directly — no
 # copy step needed. No local Node needed; GitHub is the build machine.
 
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontendn
+        working-directory: frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -41,7 +41,7 @@ def create_app(
                 "<p>Build the frontend and place the output into"
                 " <code>backend/app/static/dist/</code>. Run"
                 " <code>npm ci && npm run build</code> in the"
-                " <code>frontendn/</code> directory. The vite build"
+                " <code>frontend/</code> directory. The vite build"
                 " target is configured to output directly there,"
                 " so no manual copy step is needed.</p>"
                 "</body></html>"

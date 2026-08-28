@@ -53,7 +53,7 @@ jobs:
         working-directory: backend
         run: python -m mypy app
 
-  frontendn:
+  frontend:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -63,18 +63,18 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
-          cache-dependency-path: frontendn/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        working-directory: frontendn
+        working-directory: frontend
         run: npm ci
 
       - name: Type check
-        working-directory: frontendn
+        working-directory: frontend
         run: npm run typecheck
 
       - name: Production build
-        working-directory: frontendn
+        working-directory: frontend
         run: npm run build
 
       - name: Upload built app
@@ -90,7 +90,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: package-lock-json
-          path: frontendn/package-lock.json
+          path: frontend/package-lock.json
           if-no-files-found: warn
 
   integration:
@@ -196,7 +196,7 @@ jobs:
 
   packaging:
     runs-on: windows-latest
-    needs: [backend, frontendn]
+    needs: [backend, frontend]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -211,7 +211,7 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path "backend/app/static/dist/index.html")) {
-            Write-Error "frontendn/dist not found in packaging artifact"
+            Write-Error "frontend/dist not found in packaging artifact"
             exit 1
           }
           Write-Host "Frontend build present at backend/app/static/dist/"
@@ -228,7 +228,7 @@ jobs:
 
   playwright-deterministic:
     runs-on: windows-latest
-    needs: [backend, frontendn, packaging]
+    needs: [backend, frontend, packaging]
     timeout-minutes: 15
     env:
       RTAI_TEST_ADAPTER: fake

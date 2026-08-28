@@ -5,7 +5,7 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 ## Phase 0 — Repository foundation
 | Feature | Status |
 |---|---|
-| backend/ + frontendn/ + docs/ structure | complete |
+| backend/ + frontend/ + docs/ structure | complete |
 | AgentAdapter interface (agents/base.py) | complete |
 | Normalized event protocol documented | complete |
 | Transport interface + Mock/WebSocket implementations (frontend) | complete |

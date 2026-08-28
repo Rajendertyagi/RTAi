@@ -10,15 +10,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: cd frontendn && npm ci
-      - run: npx prettier --write . ../tests/frontendn
-        working-directory: frontendn
+      - run: cd frontend && npm ci
+      - run: npx prettier --write . ../tests/frontend
+        working-directory: frontend
       - name: Commit normalized files
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add -A
-          git diff --cached --quiet || git commit -m "chore: normalize frontendn line endings to LF via prettier"
+          git diff --cached --quiet || git commit -m "chore: normalize frontend line endings to LF via prettier"
       - name: Push normalization
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
