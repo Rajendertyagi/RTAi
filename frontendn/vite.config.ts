@@ -1,14 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { viteSingleFile } from "vite-plugin-singlefile";
 
-// Single-file build: everything (JS + CSS) is inlined into dist/index.html.
-// CI copies that file to backend/app/static/dist/demo/chat.html.
+// Multi-file build: emits index.html + assets/*.js + assets/*.css.
+// `base: "./"` keeps asset URLs relative so they resolve under /demo1/.
+// CI copies the whole dist/ to backend/app/static/dist/demo1/.
 export default defineConfig({
-  plugins: [react(), viteSingleFile()],
+  plugins: [react()],
+  base: "./",
   build: {
     outDir: "dist",
-    assetsInlineLimit: 100_000_000,
-    chunkSizeWarningLimit: 100_000_000,
   },
 });

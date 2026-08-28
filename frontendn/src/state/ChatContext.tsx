@@ -131,6 +131,7 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       };
 
     case "agents_available":
+      if (!event.agents) return state;
       return {
         ...state,
         capabilities: { ...state.capabilities, agents: event.agents },
@@ -138,6 +139,7 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       };
 
     case "models_available":
+      if (!event.models) return state;
       return {
         ...state,
         capabilities: { ...state.capabilities, models: event.models },
@@ -151,6 +153,7 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       return { ...state, selectedModel: event.model_id };
 
     case "thinking_available": {
+      if (!event.thinking_levels) return state;
       const levels = event.thinking_levels;
       const level = levels.includes(state.thinkingLevel) ? state.thinkingLevel : levels[0] ?? "off";
       return { ...state, capabilities: { ...state.capabilities, thinkingLevels: levels }, thinkingLevel: level };

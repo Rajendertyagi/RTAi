@@ -72,11 +72,11 @@ export interface SessionItem {
 export type ServerEvent =
   | { type: "status"; state: "starting" | "ready" | "disconnected"; cwd?: string }
   | { type: "error"; message: string; code?: string }
-  | { type: "agents_available"; agents: CapabilityItem[] }
-  | { type: "models_available"; models: CapabilityItem[] }
+  | { type: "agents_available"; agents?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
+  | { type: "models_available"; models?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "agent_selected"; agent_id: string }
   | { type: "model_selected"; model_id: string }
-  | { type: "thinking_available"; thinking_levels: string[] }
+  | { type: "thinking_available"; thinking_levels?: string[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "thinking_selected"; level: string }
   | { type: "user_message"; text: string }
   | { type: "delta"; text: string; sequence?: number }
