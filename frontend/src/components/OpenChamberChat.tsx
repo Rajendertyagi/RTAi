@@ -1,0 +1,149 @@
+"use client";
+
+import {
+  ThreadPrimitive,
+  MessagePrimitive,
+  ComposerPrimitive,
+  AuiIf,
+} from "@assistant-ui/react";
+import { ArrowUp, StopCircle } from "lucide-react";
+import { useAuiState, useAui } from "@assistant-ui/react";
+import { useEffect, useRef } from "react";
+import { useChatStore } from "../state/chatStore";
+import { registerToolRenderer } from "../runtime/RtaiRuntimeProvider";
+import { ToolCard } from "./ToolCard";
+
+// Register the tool renderer
+registerToolRenderer("ToolCard", ToolCard);
+
+// Auto-scroll to bottom when new messages arrive
+function useAutoScroll() {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const observer = new MutationObserver(() => {
+      // Only auto-scroll if user is near bottom
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+
+    observer.observe(el, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  return scrollRef;
+}
+
+export function OpenChamberChat() {
+  const aui = useAui();
+  const scrollRef = useAutoScroll();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const isConnected = useChatStore((s) => s.connected);
+
+  const handleCancel = () => {
+    aui.thread().cancelRun();
+  };
+
+  return (
+    <div className="app flex h-full flex-col">
+      {/* Header */}
+      <header className="app__header flex h-14 items-center border-b border-[var(--interactive-border)] bg-[var(--surface-background)] px-4">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-medium text-[var(--foreground)]">RTAI</span>
+          <span
+            className={`h-2 w-2 rounded-full ${isConnected ? "bg-[var(--status-success)]" : "bg-[var(--status-error)]"}`}
+            aria-label={isConnected ? "Connected" : "Disconnected"}
+          />
+        </div>
+        <div className="ml-auto flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
+          <span>{useChatStore((s) => s.agentInfo) || "Agent"}</span>
+        </div>
+      </header>
+
+      {/* Main chat area */}
+      <div className="app__main flex flex-1 overflow-hidden">
+        <ThreadPrimitive.Root className="flex h-full flex-col">
+          <ThreadPrimitive.Viewport
+            ref={scrollRef}
+            className="chat__messages flex-1 overflow-y-auto px-4 py-6"
+          >
+            <AuiIf condition={(s) => s.thread.isEmpty}>
+              <div className="empty-state mx-auto max-w-md text-center">
+                <h1 className="text-2xl font-normal text-[var(--foreground)]">
+                  How can I help?
+                </h1>
+                <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+                  Start a conversation with the AI assistant
+                </p>
+              </div>
+            </AuiIf>
+
+            <ThreadPrimitive.Messages>
+              {({ message }) => {
+                if (message.role === "user") {
+                  return (
+                    <MessagePrimitive.Root className="message-turn flex justify-end">
+                      <div className="message--user max-w-[75%] rounded-xl bg-[var(--chat-user-message-bg)] px-4 py-2.5 text-sm text-[var(--foreground)]">
+                        <MessagePrimitive.Parts />
+                      </div>
+                    </MessagePrimitive.Root>
+                  );
+                }
+
+                return (
+                  <MessagePrimitive.Root className="message-turn">
+                    <div className="message--assistant w-full">
+                      <MessagePrimitive.Parts />
+                    </div>
+                  </MessagePrimitive.Root>
+                );
+              }}
+            </ThreadPrimitive.Messages>
+          </ThreadPrimitive.Viewport>
+
+          {/* Status row — shows while running */}
+          <AuiIf condition={(s) => s.thread.isRunning}>
+            <div className="status-bar flex h-8 items-center px-4 text-sm text-[var(--muted-foreground)]">
+              <span className="dot-pulse">●</span>
+              <span>Assistant is working...</span>
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-[var(--interactive-hover)]"
+                aria-label="Stop generation"
+              >
+                <StopCircle className="h-4 w-4" />
+                Stop
+              </button>
+            </div>
+          </AuiIf>
+
+          {/* Composer */}
+          <ThreadPrimitive.ViewportFooter>
+            <div className="composer border-t border-[var(--interactive-border)] bg-[var(--background)] p-4">
+              <div className="composer__inner mx-auto max-w-3xl">
+                <ComposerPrimitive.Root>
+                  <div className="composer__row flex items-end gap-2">
+                    <ComposerPrimitive.Input
+                      placeholder="Ask anything..."
+                      className="composer__input flex-1 resize-none rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-background)] px-4 py-2.5 text-sm outline-none transition-colors focus:border-[var(--interactive-border-focus)]"
+                      rows={1}
+                    />
+                    <ComposerPrimitive.Send className="composer__submit flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] transition-opacity hover:opacity-85 disabled:opacity-40">
+                      <ArrowUp className="h-4 w-4" />
+                    </ComposerPrimitive.Send>
+                  </div>
+                </ComposerPrimitive.Root>
+              </div>
+            </div>
+          </ThreadPrimitive.ViewportFooter>
+        </ThreadPrimitive.Root>
+      </div>
+    </div>
+  );
+}

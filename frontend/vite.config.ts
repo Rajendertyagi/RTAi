@@ -1,13 +1,16 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+﻿import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+import tailwindcss from "@tailwindcss/vite"
+import { resolve } from "path"
 
-// Build directly into backend/app/static/dist/ so the FastAPI static mount
-// serves it at / with no copy step needed. `base: "./"` keeps asset URLs
-// relative for both production and the missing-frontend diagnostic path.
 export default defineConfig({
-  plugins: [react()],
-  base: "./",
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: { "@": resolve(__dirname, "src") },
+  },
   build: {
     outDir: "../backend/app/static/dist",
+    emptyOutDir: true,
+    sourcemap: false,
   },
-});
+})
