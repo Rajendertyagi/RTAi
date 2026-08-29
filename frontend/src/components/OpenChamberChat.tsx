@@ -15,11 +15,10 @@ import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import type { TextMessagePartProps } from "@assistant-ui/react";
 
 // MarkdownTextPrimitive reads text from React context (TextMessagePartProvider)
-// and cannot be used directly as a TextMessagePartComponent. Wrap it so the
-// wrapper accepts the required TextMessagePartProps and renders MarkdownTextPrimitive
-// which pulls text from the provider context automatically.
-function MarkdownTextWrapper(props: TextMessagePartProps) {
-  return <MarkdownTextPrimitive {...props} />;
+// and its props are incompatible with TextMessagePartProps. We must not spread
+// the part props — instead render it without props so it reads from context.
+function MarkdownTextWrapper(_props: TextMessagePartProps) {
+  return <MarkdownTextPrimitive />;
 }
 
 const messagePartsComponents = {
