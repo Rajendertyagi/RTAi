@@ -551,7 +551,15 @@ class OpenCodeServerAdapter(AgentAdapter):
         ``variant`` per request - so the choice is applied on the next prompt
         rather than being a no-op.
         """
-        resolved = "model" if kind == "model" else ("mode" if kind == "mode" else ("agent" if kind == "agent" else "thinking"))
+        resolved = (
+            "model"
+            if kind == "model"
+            else "mode"
+            if kind == "mode"
+            else "agent"
+            if kind == "agent"
+            else "thinking"
+        )
 
         if resolved == "mode":
             return SelectionResult(
@@ -563,11 +571,15 @@ class OpenCodeServerAdapter(AgentAdapter):
         if resolved == "agent":
             known = {a.id for a in self._agents_section.items} if self._agents_section else set()
             if known and value_id not in known:
-                return SelectionResult(kind="agent", applied=False, message=f"Unknown agent {value_id!r}.")
+                return SelectionResult(
+                    kind="agent", applied=False, message=f"Unknown agent {value_id!r}."
+                )
         elif resolved == "model":
             known = {m.id for m in self._capabilities.models.items}
             if known and value_id not in known:
-                return SelectionResult(kind="model", applied=False, message=f"Unknown model {value_id!r}.")
+                return SelectionResult(
+                    kind="model", applied=False, message=f"Unknown model {value_id!r}."
+                )
         elif resolved == "thinking":
             known = {t.id for t in self._capabilities.thinking.items}
             if known and value_id not in known:
@@ -579,7 +591,10 @@ class OpenCodeServerAdapter(AgentAdapter):
         return SelectionResult(
             kind=resolved,
             applied=True,
-            message="Applied to the next prompt (the server has no session-level selection endpoint).",
+            message=(
+                "Applied to the next prompt "
+                "(the server has no session-level selection endpoint)."
+            ),
         )
 
     async def close(self) -> None:
