@@ -146,7 +146,7 @@
     --transition-slow: 350ms ease;
   }
 
-  .dark {
+  [data-theme="dark"] {
     color-scheme: dark;
 
     --background: oklch(0.16 0.01 30);

@@ -7,23 +7,17 @@
     <meta name="theme-color" content="#fdfcfa" media="(prefers-color-scheme: light)" />
     <title>RTAI Chat</title>
     <script>
-      // Applies the theme before first paint so the page never flashes the
-      // wrong colours. Must stay inline and synchronous, and must mirror the
-      // logic in src/lib/theme.ts (stored choice, else system preference).
+      // Pre-paint: sets theme before React renders so colors are correct on first paint.
+      // Must be synchronous, inline, and before the React script.
       (function () {
         try {
           var stored = localStorage.getItem("theme");
-          var theme =
-            stored === "dark" || stored === "light"
-              ? stored
-              : window.matchMedia("(prefers-color-scheme: dark)").matches
-                ? "dark"
-                : "light";
+          var isDark = stored === "dark" || (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches);
           var root = document.documentElement;
-          root.dataset.theme = theme;
-          root.classList.toggle("dark", theme === "dark");
-        } catch (error) {
-          /* Storage or matchMedia unavailable; CSS falls back to the system. */
+          root.dataset.theme = isDark ? "dark" : "light";
+          root.style.colorScheme = isDark ? "dark" : "light";
+        } catch (e) {
+          /* Storage unavailable; CSS defaults to light. */
         }
       })();
     </script>
