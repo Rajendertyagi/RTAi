@@ -43,7 +43,12 @@ export function useChatSocket(onEvent: (event: ServerEvent) => void): UseChatSoc
     };
 
     ws.onclose = () => {
-      if (!closedByUser.current && folderRef.current) {
+      // Only reconnect when THIS socket is still the active one. A socket
+      // closed by a newer connect() (or by close()) must not schedule a
+      // reconnect: closedByUser is shared and reset by every connect(), so
+      // without this guard every manual reconnect would spawn an endless
+      // connect/close loop.
+      if (wsRef.current === ws && !closedByUser.current && folderRef.current) {
         setTimeout(() => connect(folderRef.current), 3000);
       }
     };
