@@ -60,7 +60,10 @@ jobs:
           if [ -n "$(git status --porcelain frontend/package-lock.json)" ]; then
             git add frontend/package-lock.json
             git commit -m "chore(frontend): commit generated package-lock.json [skip ci]"
-            git push
+            # Tolerate a lost race: if a concurrent run (or a developer push)
+            # moved the branch, the lockfile commit is a chore and the next run
+            # will pick it up. Failing the build here would be a false negative.
+            git push || echo "Lockfile push skipped (branch moved); will retry next run."
             echo "Lockfile committed."
           else
             echo "Lockfile unchanged; nothing to commit."
@@ -104,5 +107,8 @@ jobs:
             echo "No changes to dist"
           else
             git commit -m "build: publish chat UI to dist [skip ci]"
-            git push
+            # Retry once after rebasing: a concurrent run may have moved the
+            # branch. Losing the dist commit silently would leave the backend
+            # serving a stale bundle, so this one is worth retrying.
+            git push || (git pull --rebase && git push)
           fi
