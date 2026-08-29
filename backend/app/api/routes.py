@@ -119,9 +119,18 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     turn=short_id(turn_ctx.get("turn_id")),
                 )
 
+    # Track whether we created a temporary session dir (for cleanup later).
+    session_dir: Path | None = None
+
     # Validate project path early so we can reject before creating the adapter.
     project: Path | None = None
     try:
+        # If no cwd provided, create a temporary scratch folder for the agent.
+        # This lets chat mode work without a pre-selected project folder.
+        if cwd is None:
+            import tempfile
+            session_dir = Path(tempfile.mkdtemp(prefix="rtai-session-"))
+            cwd = str(session_dir)
         project = resolve_project_path(cwd)
     except ValueError as exc:
         if str(exc) == "project_folder_not_provided":
@@ -505,6 +514,10 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
         with contextlib.suppress(Exception):
             await adapter.close()
         log_event(logger, logging.INFO, "adapter_cleanup")
+        # Clean up the temporary session directory if we created one.
+        if session_dir is not None:
+            import shutil
+            shutil.rmtree(session_dir, ignore_errors=True)
 
 
 # Explicitly reserved API prefix — any path under /api that hits here but has
