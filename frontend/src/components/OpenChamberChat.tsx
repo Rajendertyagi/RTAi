@@ -53,9 +53,9 @@ export function OpenChamberChat() {
   };
 
   return (
-    <div className="app flex h-full flex-col">
+    <div className="app h-screen flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="app__header flex h-14 items-center border-b border-[var(--interactive-border)] bg-[var(--surface-background)] px-4">
+      <header className="app__header flex h-14 shrink-0 items-center border-b border-[var(--interactive-border)] bg-[var(--surface-background)] px-4">
         <div className="flex items-center gap-2">
           <span className="text-lg font-medium text-[var(--foreground)]">RTAI</span>
           <span
@@ -69,7 +69,7 @@ export function OpenChamberChat() {
       </header>
 
       {/* Main chat area */}
-      <div className="app__main flex flex-1 overflow-hidden">
+      <div className="app__main flex min-h-0 flex-1 overflow-hidden">
         <ThreadPrimitive.Root className="flex h-full flex-col">
           <ThreadPrimitive.Viewport
             ref={scrollRef}
