@@ -8,6 +8,7 @@ provider content.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -89,7 +90,8 @@ class QuietFakeAdapter(StreamingFakeAdapter):
     """Emits nothing for a prompt; used for cancel/disconnect flows."""
 
     async def submit_prompt(self, text: str) -> None:
-        return None
+        # Hold long enough for a cancel command to arrive and interrupt us.
+        await asyncio.sleep(10)
 
 
 class ErrorFakeAdapter(StreamingFakeAdapter):
