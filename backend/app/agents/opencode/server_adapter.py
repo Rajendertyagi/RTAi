@@ -170,6 +170,11 @@ class OpenCodeServerAdapter(AgentAdapter):
         self._completed_emitted = False
         self._error_emitted = False
         self._sent_part_offsets: dict[str, int] = {}
+        # Open streaming content part (text/reasoning). The server part id is
+        # stable across updates, so it doubles as the protocol part id; a new
+        # part opens whenever the part id or kind changes.
+        self._open_part_id: str | None = None
+        self._open_part_kind: str | None = None
         # Tool call ids already announced this turn (first sighting => tool_start).
         self._seen_tool_calls: set[str] = set()
 
@@ -445,6 +450,8 @@ class OpenCodeServerAdapter(AgentAdapter):
         if not self._session_id:
             raise RuntimeError("OpenCode server session is not ready")
         self._sent_part_offsets.clear()
+        self._open_part_id = None
+        self._open_part_kind = None
         self._seen_tool_calls.clear()
         self._awaiting_idle = True
         self._completed_emitted = False
@@ -725,8 +732,8 @@ class OpenCodeServerAdapter(AgentAdapter):
                 await self._fail_active_turn(
                     "OpenCode server instance was disposed mid-turn"
                 )
-            if self._benchmark is not None:
-                self._benchmark.fail("stream_dropped")
+                if self._benchmark is not None:
+                    self._benchmark.fail("stream_dropped")
             return True
         if "command" in event_type.lower():
             # Command list changed after session creation - re-push it so the
@@ -755,25 +762,19 @@ class OpenCodeServerAdapter(AgentAdapter):
             part: dict[str, Any] = raw_part if isinstance(raw_part, dict) else {}
             part_type = part.get("type")
             if part_type == "tool":
+                # A tool part ends any open content part: server parts are
+                # complete objects, unlike ACP's shared-messageId chunks.
+                await self._close_open_part()
                 await self._emit_tool_event(part)
                 return True
-            if part_type is not None and part_type != "text":
+            if part_type not in ("text", "reasoning", None):
+                # step-start/step-finish/snapshot/patch/file/subtask/... are
+                # not streamed content, but they do end an open content part.
+                await self._close_open_part()
                 return True
-            part_id = part.get("id")
-            part_key = str(part_id) if isinstance(part_id, str) else ""
-            if self._benchmark is not None:
+            if part_type != "reasoning" and self._benchmark is not None:
                 self._benchmark.mark("first_token")
-            delta = properties.get("delta")
-            if isinstance(delta, str):
-                chunk = delta
-            else:
-                raw_text = part.get("text")
-                full_text: str = raw_text if isinstance(raw_text, str) else ""
-                sent = self._sent_part_offsets.get(part_key, 0)
-                chunk = full_text[sent:] if len(full_text) > sent else ""
-                self._sent_part_offsets[part_key] = len(full_text)
-            if chunk and self._emit is not None:
-                await self._emit({"type": "delta", "text": chunk})
+            await self._emit_content_part(part, properties.get("delta"))
             return True
 
         if event_type == "session.idle":
@@ -790,6 +791,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                     self._benchmark.mark("completed")
                 emitter = self._emit
                 if emitter is not None:
+                    await self._close_open_part()
                     await emitter({"type": "done"})
             return True
 
@@ -812,6 +814,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                         if isinstance(err_props, dict)
                         else None
                     ) or "session reported an error"
+                    await self._close_open_part()
                     await emitter({"type": "error", "message": str(message)})
             return True
 
@@ -820,9 +823,73 @@ class OpenCodeServerAdapter(AgentAdapter):
     async def _fail_active_turn(self, message: str) -> None:
         if self._awaiting_idle and self._emit is not None:
             self._error_emitted = True
+            await self._close_open_part()
             await self._emit({"type": "error", "message": message})
         # The caller records the precise benchmark failure reason so a single
         # drop is never counted twice.
+
+    async def _close_open_part(self) -> None:
+        """Close the open content part, if any."""
+        if self._open_part_id is None:
+            return
+        if self._emit is not None:
+            await self._emit({"type": "part_done", "part_id": self._open_part_id})
+        self._open_part_id = None
+        self._open_part_kind = None
+
+    async def _emit_content_part(self, part: dict[str, Any], delta: Any) -> None:
+        """Stream a server text/reasoning part as part_start / part_delta events.
+
+        Mirrors the ACP adapter: a new part opens whenever the part id or kind
+        changes, so thinking and reply text become separate parts in true
+        chronological order. The legacy ``delta`` event is kept for text parts
+        until the frontend moves fully to parts.
+        """
+        if self._emit is None:
+            return
+        part_type = part.get("type")
+        if part_type is None:
+            # Legacy fallback: a part without a type field is reply text.
+            part_type = "text"
+        if part_type not in ("text", "reasoning"):
+            return
+        part_id = part.get("id")
+        part_key = str(part_id) if isinstance(part_id, str) else ""
+
+        # Delta is preferred; otherwise fall back to the full text minus what
+        # has already been sent for this part.
+        if isinstance(delta, str):
+            chunk = delta
+            raw_text = part.get("text")
+            if isinstance(raw_text, str):
+                self._sent_part_offsets[part_key] = len(raw_text)
+        else:
+            raw_text = part.get("text")
+            full_text: str = raw_text if isinstance(raw_text, str) else ""
+            sent = self._sent_part_offsets.get(part_key, 0)
+            chunk = full_text[sent:] if len(full_text) > sent else ""
+            self._sent_part_offsets[part_key] = len(full_text)
+        if not chunk:
+            return
+
+        if part_key:
+            if part_key != self._open_part_id or part_type != self._open_part_kind:
+                await self._close_open_part()
+                self._open_part_id = part_key
+                self._open_part_kind = part_type
+                await self._emit(
+                    {
+                        "type": "part_start",
+                        "part_id": part_key,
+                        "part_type": part_type,
+                    }
+                )
+            await self._emit(
+                {"type": "part_delta", "part_id": part_key, "text": chunk}
+            )
+        # Legacy path: only the reply belongs in the concatenated text blob.
+        if part_type == "text":
+            await self._emit({"type": "delta", "text": chunk})
 
     async def _emit_tool_event(self, part: dict[str, Any]) -> None:
         """Map an OpenCode server tool part to Protocol v1 tool events.
