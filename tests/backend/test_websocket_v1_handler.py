@@ -172,29 +172,17 @@ class WebSocketV1Tests(unittest.IsolatedAsyncioTestCase):
         # The important thing is we don't crash.
 
     async def test_blank_cwd_keeps_connection_alive_with_error_event(self) -> None:
-        """Blank or missing cwd should NOT close the WebSocket — it should
-        emit a clear error event so the UI can prompt the user."""
+        """Blank or missing cwd now auto-creates a temp session dir so the
+        connection succeeds. Whitespace-only cwd still fails."""
         client = self._make_client()
 
         exc_type = WebSocketDisconnect if WebSocketDisconnect is not Exception else None
         try:
             with client.websocket_connect("/ws") as ws:
-                ev = ws.receive_json()
-                self.assertEqual(ev["type"], "error")
-                self.assertEqual(ev["code"], "project_folder_not_provided")
-                # Connection stays open — send a dummy command to verify.
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r1",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "text": "hi",
-                })
-                result = ws.receive_json()
-                self.assertEqual(result["type"], "command_result")
-                self.assertFalse(result["success"])
+                # Missing cwd -> temp dir created -> connection succeeds
+                events = _read_until_ready(ws)
+                types = [e["type"] for e in events]
+                self.assertIn("status", types)
         except WebSocketDisconnect:
             if exc_type is not None:
                 pass
@@ -305,13 +293,13 @@ class WebSocketV1Tests(unittest.IsolatedAsyncioTestCase):
                 raise
 
     async def test_blank_cwd_error_event_includes_protocol_version(self) -> None:
-        """The error event emitted when no project folder is provided must also
-        carry protocol_version so the UI can parse it."""
+        """Whitespace-only cwd should emit an error with protocol_version.
+        (Missing cwd auto-creates a temp dir and succeeds.)"""
         client = self._make_client()
 
         exc_type = WebSocketDisconnect if WebSocketDisconnect is not Exception else None
         try:
-            with client.websocket_connect("/ws") as ws:
+            with client.websocket_connect("/ws?cwd=%20%20") as ws:
                 ev = ws.receive_json()
                 self.assertEqual(ev["type"], "error")
                 self.assertEqual(ev["code"], "project_folder_not_provided")
