@@ -50,8 +50,12 @@ class FakeHttp:
                 return self
             async def __anext__(self) -> str:
                 # Stream that never delivers an event; the test cancels it.
-                await asyncio.sleep(3600)
-                return ""
+                # Use a short sleep so cancellation propagates quickly.
+                try:
+                    await asyncio.sleep(0.1)
+                except asyncio.CancelledError:
+                    raise
+                raise StopAsyncIteration
         return Empty()
 
 
