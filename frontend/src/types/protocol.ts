@@ -67,7 +67,26 @@ export type ClientCommand =
 
 // === Shared Types ===
 
+// Terminal states reported by tool_result.
 export type ToolStatus = "success" | "error" | "cancelled" | "aborted" | "timeout";
+
+// A tool call's status across its whole life: it starts as "running" (from
+// tool_start) and only later lands on one of the terminal ToolStatus values
+// (from tool_result). Kept separate so "running" never leaks into ToolStatus.
+export type ToolCallStatus = ToolStatus | "running" | "pending";
+
+// JSON-compatible value/object types. Tool input arrives as JSON on the wire,
+// and assistant-ui's message parts require JSON-compatible args, so raw_input
+// is typed this way rather than as Record<string, unknown>.
+export type JSONValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JSONValue[]
+  | { [key: string]: JSONValue };
+
+export type JSONObject = { [key: string]: JSONValue };
 
 export interface ToolLocation {
   path: string;
@@ -82,11 +101,11 @@ export type ToolContentBlock =
 export interface ToolCall {
   id: string;
   title?: string;
-  status: ToolStatus;
+  status: ToolCallStatus;
   kind?: string;
   content?: ToolContentBlock[];
   locations?: ToolLocation[];
-  rawInput?: Record<string, unknown>;
+  rawInput?: JSONObject;
 }
 
 export interface PermissionRequest {

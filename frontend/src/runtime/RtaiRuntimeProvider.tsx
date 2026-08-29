@@ -58,12 +58,15 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
                 toolName: tool.title ?? tool.kind ?? "tool",
                 toolCallId: tool.id,
                 args: tool.rawInput ?? {},
+                // Literal types on the values only — a whole-object `as const`
+                // would make every property readonly and stop matching the
+                // mutable part types assistant-ui expects.
                 status:
                   tool.status === "running"
-                    ? ({ type: "running" } as const)
+                    ? { type: "running" as const }
                     : tool.status === "error"
-                      ? ({ type: "incomplete", reason: "error" } as const)
-                      : ({ type: "complete" } as const),
+                      ? { type: "incomplete" as const, reason: "error" as const }
+                      : { type: "complete" as const },
                 result:
                   tool.status === "success"
                     ? tool.content?.map((c: ToolContentBlock) =>
