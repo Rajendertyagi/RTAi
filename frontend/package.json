@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@assistant-ui/react": "0.15.17",
     "@shikijs/langs": "4.4.3",
     "@shikijs/themes": "4.4.3",
     "react": "^18.3.1",

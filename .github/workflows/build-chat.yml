@@ -39,14 +39,19 @@ jobs:
       # Generated in CI (never locally) so it matches the project's declared
       # Node/npm environment. `npm ci` below never rewrites it, so an unchanged
       # lockfile is not recommitted on every run.
-      - name: Generate lockfile if missing
+      # Regenerated whenever it is missing OR out of sync with package.json.
+      # `npm ci` refuses to run against a stale lockfile, so a dependency
+      # change has to refresh it here instead of failing the install below.
+      # An unchanged lockfile still is not recommitted: the dry run proves it
+      # already satisfies package.json, so this step leaves it untouched.
+      - name: Sync lockfile with package.json
         working-directory: frontend
         run: |
           set -euo pipefail
-          if [ -f package-lock.json ]; then
-            echo "package-lock.json already present; leaving it untouched."
+          if [ -f package-lock.json ] && npm ci --dry-run --no-audit --no-fund >/dev/null 2>&1; then
+            echo "package-lock.json is in sync with package.json; leaving it untouched."
           else
-            echo "No package-lock.json; generating from package.json."
+            echo "Lockfile missing or out of sync; regenerating from package.json."
             npm install --package-lock-only --no-audit --no-fund
             test -f package-lock.json
           fi
