@@ -146,7 +146,7 @@
     --transition-slow: 350ms ease;
   }
 
-  [data-theme="dark"] {
+  .dark {
     color-scheme: dark;
 
     --background: oklch(0.16 0.01 30);
@@ -185,15 +185,31 @@
     --syntax-operator: oklch(0.68 0.18 10);
   }
 
-  html, body {
+  html, body, #root {
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+    margin: 0;
+    padding: 0;
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
     font-weight: 400;
     text-size-adjust: 100%;
+  }
+
+  .app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .app__main {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Accessibility Focus */
