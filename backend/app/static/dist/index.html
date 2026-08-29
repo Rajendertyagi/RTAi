@@ -2,33 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#151313" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fdfcfa" media="(prefers-color-scheme: light)" />
     <title>RTAI Chat</title>
-    <script>
-      // Applies the theme before first paint so the page never flashes the
-      // wrong colours. Must stay inline and synchronous, and must mirror the
-      // logic in src/lib/theme.ts (stored choice, else system preference).
-      (function () {
-        try {
-          var stored = localStorage.getItem("theme");
-          var theme =
-            stored === "dark" || stored === "light"
-              ? stored
-              : window.matchMedia("(prefers-color-scheme: dark)").matches
-                ? "dark"
-                : "light";
-          var root = document.documentElement;
-          root.dataset.theme = theme;
-          root.classList.toggle("dark", theme === "dark");
-        } catch (error) {
-          /* Storage or matchMedia unavailable; CSS falls back to the system. */
-        }
-      })();
-    </script>
-    <script type="module" crossorigin src="./assets/index-CMEjdIfL.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-AMyZgSlN.css">
+    <style>
+      html.dark, html[data-theme="dark"] { background: oklch(0.16 0.01 30); }
+      html:not(.dark):not([data-theme="light"]) { background: oklch(0.97 0.02 85); }
+    </style>
+    <script type="module" crossorigin src="/assets/index-wOPLH9z_.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Cng-H7Tx.css">
   </head>
-  <body>
+  <body class="dark">
     <div id="root"></div>
   </body>
 </html>
