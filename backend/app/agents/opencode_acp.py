@@ -322,14 +322,22 @@ class OpenCodeSession(AgentAdapter):
                 commands=_pending_section(),
             )
         caps = self._capabilities
-        # The single agent is the only selectable agent; mark it selected so
-        # selection stays an idempotent no-op rather than an ACP round-trip.
-        if caps.selected_agent is None:
-            caps.selected_agent = agent.id
+        # OpenCode exposes its agents (build, plan, and locally configured
+        # profiles) through ACP as session modes, so the agents section mirrors
+        # the modes. The single agentInfo identity stays on snapshot.agent and
+        # is surfaced separately (agent_info event / status bar).
+        agents = CapabilitySection(
+            items=tuple(
+                AgentDescriptor(id=m.id, label=m.label, description=m.description)
+                for m in caps.modes.items
+            )
+        )
+        if caps.selected_mode is not None:
+            caps.selected_agent = caps.selected_mode
         return CapabilitySnapshot(
             source=f"acp:{(self._agent_name or 'opencode').lower()}",
             agent=agent,
-            agents=CapabilitySection(items=(agent,)),
+            agents=agents,
             models=caps.models,
             modes=caps.modes,
             thinking_options=caps.thinking,
@@ -405,27 +413,19 @@ class OpenCodeSession(AgentAdapter):
         The authoritative echo (config_option_update / mode state) replaces
         local views; failures return a correlated non-applied result.
 
-        ``agent`` is special: ACP exposes exactly one agent identity, so
-        selection is an idempotent no-op for the current agent and a clear
-        rejection for anything else. No ACP request is ever made and no
-        arbitrary agent id is recorded.
+        ``agent`` maps to ACP session modes: OpenCode exposes its agents
+        (build, plan, custom profiles) as modes, so selecting an agent is a
+        mode selection. Selecting the already-active mode is a no-op.
         """
         if kind == "agent":
-            current = self._capabilities.selected_agent
+            current = self._capabilities.selected_mode
             if current is not None and value_id == current:
                 return SelectionResult(
                     kind=kind,
                     applied=True,
-                    message="Agent selection is a no-op: this ACP session exposes exactly one agent.",
+                    message="Agent selection is a no-op: the mode is already active.",
                 )
-            return SelectionResult(
-                kind=kind,
-                applied=False,
-                message=(
-                    f"Unknown agent '{value_id}'. This ACP session exposes exactly "
-                    f"one agent: {current or 'unknown'}."
-                ),
-            )
+            kind = "mode"
         if not self._connection or not self._session_id:
             return SelectionResult(kind=kind, applied=False, message="ACP session is not ready.")
         caps = self._capabilities

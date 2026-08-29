@@ -29,7 +29,6 @@ export interface ChatState {
   messages: Message[];
   capabilities: Capabilities;
   selectedAgent: string;
-  selectedMode: string;
   selectedModel: string;
   thinkingLevel: string;
   activeMessageId: string | null;
@@ -59,9 +58,8 @@ const initialState: ChatState = {
   generating: false,
   headerTitle: "Current Session",
   messages: [],
-  capabilities: { agents: [], modes: [], models: [], thinkingLevels: [], commands: [], unavailable: {} },
+  capabilities: { agents: [], models: [], thinkingLevels: [], commands: [], unavailable: {} },
   selectedAgent: "",
-  selectedMode: "",
   selectedModel: "",
   thinkingLevel: "off",
   activeMessageId: null,
@@ -187,22 +185,6 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
         selectedAgent: state.selectedAgent || agents[0]?.id || "",
       };
     }
-
-    case "modes_available": {
-      const modes = event.modes ?? [];
-      return {
-        ...state,
-        capabilities: {
-          ...state.capabilities,
-          modes,
-          unavailable: { ...state.capabilities.unavailable, modes: unavailableOf(event) },
-        },
-        selectedMode: state.selectedMode || modes[0]?.id || "",
-      };
-    }
-
-    case "mode_selected":
-      return { ...state, selectedMode: event.mode_id };
 
     case "models_available": {
       const models = event.models ?? [];
@@ -331,7 +313,6 @@ export interface ChatContextValue {
   sendPrompt: (text: string) => void;
   cancel: () => void;
   selectAgent: (agentId: string) => void;
-  selectMode: (modeId: string) => void;
   selectModel: (modelId: string) => void;
   setThinking: (level: string) => void;
   newSession: () => void;
@@ -401,20 +382,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         request_id: `req-${counters.current.req}`,
         session_id: state.sessionId,
         agent_id: agentId,
-      });
-    },
-    [state.sessionId, send],
-  );
-
-  const selectMode = useCallback(
-    (modeId: string) => {
-      counters.current.req += 1;
-      send({
-        protocol_version: PROTOCOL_VERSION,
-        type: "select_mode",
-        request_id: `req-${counters.current.req}`,
-        session_id: state.sessionId,
-        mode_id: modeId,
       });
     },
     [state.sessionId, send],
@@ -517,7 +484,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     sendPrompt,
     cancel,
     selectAgent,
-    selectMode,
     selectModel,
     setThinking,
     newSession,
