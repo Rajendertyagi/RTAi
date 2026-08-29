@@ -10,11 +10,14 @@ import { ArrowUp, StopCircle } from "lucide-react";
 import { useAuiState, useAui } from "@assistant-ui/react";
 import { useEffect, useRef } from "react";
 import { useChatStore } from "../state/chatStore";
-import { registerToolRenderer } from "../runtime/RtaiRuntimeProvider";
 import { ToolCard } from "./ToolCard";
 
-// Register the tool renderer
-registerToolRenderer("ToolCard", ToolCard);
+// Tool names are discovered at runtime from the backend (tool_start), so we
+// cannot map them to renderers by name. ToolCard is registered as the
+// fallback renderer instead: it renders every tool call with no dedicated UI.
+const messagePartsComponents = {
+  tools: { Fallback: ToolCard },
+} as const;
 
 // Auto-scroll to bottom when new messages arrive
 function useAutoScroll() {
@@ -98,7 +101,9 @@ export function OpenChamberChat() {
                 return (
                   <MessagePrimitive.Root className="message-turn">
                     <div className="message--assistant w-full">
-                      <MessagePrimitive.Parts />
+                      <MessagePrimitive.Parts
+                        components={messagePartsComponents}
+                      />
                     </div>
                   </MessagePrimitive.Root>
                 );

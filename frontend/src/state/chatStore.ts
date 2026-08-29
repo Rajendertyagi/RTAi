@@ -12,6 +12,17 @@ import type {
   ToolStatus,
 } from "../types/protocol";
 
+// A single chat message in our backend format (before conversion to
+// assistant-ui's ThreadMessageLike). Exported so the runtime can type its
+// convertMessage callback against the raw external message shape.
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  tools: ToolCall[];
+  timestamp: number;
+}
+
 export interface ChatState {
   // Connection
   connected: boolean;
@@ -24,13 +35,7 @@ export interface ChatState {
   messageId: string;
 
   // Messages
-  messages: Array<{
-    id: string;
-    role: "user" | "assistant";
-    text: string;
-    tools: ToolCall[];
-    timestamp: number;
-  }>;
+  messages: ChatMessage[];
   activeTurnId: string | null;
   activeMessageId: string | null;
 
