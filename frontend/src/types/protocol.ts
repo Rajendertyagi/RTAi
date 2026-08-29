@@ -37,11 +37,11 @@ export type ServerEvent =
   | { type: "delta"; session_id: string; turn_id: string; sequence: number; text: string }
   | { type: "done"; session_id: string; turn_id: string; reason?: "completed" | "cancelled" | "error" }
   // Tool calls
-  | { type: "tool_start"; session_id: string; turn_id: string; tool_call_id: string; title: string; kind?: string; status?: string; locations?: ToolLocation[]; raw_input?: Record<string, unknown> }
+  | { type: "tool_start"; session_id: string; turn_id: string; tool_call_id: string; title: string; kind?: string; status?: string; locations?: ToolLocation[]; raw_input?: JSONObject }
   | { type: "tool_update"; session_id: string; turn_id: string; tool_call_id: string; status?: string; content?: ToolContentBlock[]; locations?: ToolLocation[] }
   | { type: "tool_result"; session_id: string; turn_id: string; tool_call_id: string; status: ToolStatus; content?: ToolContentBlock[]; locations?: ToolLocation[]; error_message?: string }
   // Permissions
-  | { type: "permission_request"; session_id: string; turn_id: string; permission_request_id: string; tool_call_id: string; title?: string; kind?: string; raw_input?: Record<string, unknown>; content?: ToolContentBlock[]; locations?: ToolLocation[]; options: PermissionOption[] }
+  | { type: "permission_request"; session_id: string; turn_id: string; permission_request_id: string; tool_call_id: string; title?: string; kind?: string; raw_input?: JSONObject; content?: ToolContentBlock[]; locations?: ToolLocation[]; options: PermissionOption[] }
   | { type: "permission_result"; session_id: string; turn_id: string; permission_request_id: string; option_id?: string }
   // Commands
   | { type: "command_result"; request_id: string; command: string; success: boolean; code?: string; message?: string; effective_value?: unknown }
@@ -114,7 +114,7 @@ export interface PermissionRequest {
   options: PermissionOption[];
   title?: string;
   kind?: string;
-  raw_input?: Record<string, unknown>;
+  raw_input?: JSONObject;
   content?: ToolContentBlock[];
   locations?: ToolLocation[];
 }
