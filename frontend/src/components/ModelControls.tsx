@@ -1,7 +1,7 @@
 import React from "react";
 import { useChat } from "../state/ChatContext";
 import { Dropdown } from "./Dropdown";
-import { AgentIcon, ModelIcon, ThinkingIcon } from "./Icons";
+import { AgentIcon, ModeIcon, ModelIcon, ThinkingIcon } from "./Icons";
 
 function cap(label: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
@@ -15,14 +15,15 @@ function cap(label: string): string {
  * lists), never on the textarea contents.
  */
 function ModelControlsImpl() {
-  const { state, selectAgent, selectModel, setThinking } = useChat();
-  const { agents, models, thinkingLevels } = state.capabilities;
+  const { state, selectAgent, selectMode, selectModel, setThinking } = useChat();
+  const { agents, modes, models, thinkingLevels } = state.capabilities;
   const selectedAgent = agents.find((a) => a.id === state.selectedAgent);
+  const selectedMode = modes.find((m) => m.id === state.selectedMode);
   const selectedModel = models.find((m) => m.id === state.selectedModel);
 
   // When the backend marks a section unavailable it sends no items at all, so
   // surface its reason rather than leaving a dead, silent control behind.
-  const reasonFor = (section: "agents" | "models" | "thinking") => {
+  const reasonFor = (section: "agents" | "modes" | "models" | "thinking") => {
     const why = state.capabilities.unavailable[section];
     if (why) return `${why.message} (${why.code})`;
     return `No ${section === "thinking" ? "thinking levels" : section} available. Connect to a project folder first.`;
@@ -44,6 +45,21 @@ function ModelControlsImpl() {
         items={agents}
         activeId={state.selectedAgent}
         onSelect={selectAgent}
+      />
+      <Dropdown
+        className="ctrl-btn has-label"
+        title="Mode"
+        disabled={modes.length === 0}
+        disabledReason={reasonFor("modes")}
+        trigger={
+          <>
+            <ModeIcon />
+            <span className="btn-label">{selectedMode?.label ?? "Mode"}</span>
+          </>
+        }
+        items={modes}
+        activeId={state.selectedMode}
+        onSelect={selectMode}
       />
       <Dropdown
         className="ctrl-btn has-label"

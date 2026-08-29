@@ -68,6 +68,7 @@ export interface Unavailable {
 
 export interface Capabilities {
   agents: CapabilityItem[];
+  modes: CapabilityItem[];
   models: CapabilityItem[];
   thinkingLevels: string[];
   commands: CapabilityItem[];
@@ -75,6 +76,7 @@ export interface Capabilities {
   // entirely when a section is unavailable, so the reason is the only signal.
   unavailable: {
     agents?: Unavailable;
+    modes?: Unavailable;
     models?: Unavailable;
     thinking?: Unavailable;
     commands?: Unavailable;
@@ -93,8 +95,10 @@ export type ServerEvent =
   | { type: "error"; message: string; code?: string }
   | { type: "agent_info"; name: string }
   | { type: "agents_available"; agents?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
+  | { type: "modes_available"; modes?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "models_available"; models?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "agent_selected"; agent_id: string }
+  | { type: "mode_selected"; mode_id: string }
   | { type: "model_selected"; model_id: string }
   | { type: "thinking_available"; thinking_levels?: string[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "thinking_selected"; level: string }
@@ -133,6 +137,7 @@ export type ClientCommand =
     })
   | (BaseCommand & { type: "cancel"; turn_id: string })
   | (BaseCommand & { type: "select_agent"; agent_id: string })
+  | (BaseCommand & { type: "select_mode"; mode_id: string })
   | (BaseCommand & { type: "select_model"; model_id: string })
   | (BaseCommand & { type: "set_thinking"; level: string })
   | (BaseCommand & { type: "permission_response"; turn_id: string; permission_request_id: string; option_id: string });
