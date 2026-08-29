@@ -11,11 +11,13 @@ import { useAuiState, useAui } from "@assistant-ui/react";
 import { useEffect, useRef } from "react";
 import { useChatStore } from "../state/chatStore";
 import { ToolCard } from "./ToolCard";
+import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 
 // Tool names are discovered at runtime from the backend (tool_start), so we
 // cannot map them to renderers by name. ToolCard is registered as the
 // fallback renderer instead: it renders every tool call with no dedicated UI.
 const messagePartsComponents = {
+  Text: MarkdownTextPrimitive,
   tools: { Fallback: ToolCard },
 } as const;
 
@@ -47,6 +49,7 @@ export function OpenChamberChat() {
   const scrollRef = useAutoScroll();
   const isRunning = useAuiState((s) => s.thread.isRunning);
   const isConnected = useChatStore((s) => s.connected);
+  const agentInfo = useChatStore((s) => s.agentInfo);
 
   const handleCancel = () => {
     aui.thread().cancelRun();
@@ -64,7 +67,7 @@ export function OpenChamberChat() {
           />
         </div>
         <div className="ml-auto flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
-          <span>{useChatStore((s) => s.agentInfo) || "Agent"}</span>
+          <span>{agentInfo || "Agent"}</span>
         </div>
       </header>
 
@@ -90,8 +93,9 @@ export function OpenChamberChat() {
               {({ message }) => {
                 if (message.role === "user") {
                   return (
-                    <MessagePrimitive.Root className="message-turn flex justify-end">
-                      <div className="message--user max-w-[75%] rounded-xl bg-[var(--chat-user-message-bg)] px-4 py-2.5 text-sm text-[var(--foreground)]">
+                    <MessagePrimitive.Root className="msg-row user">
+                      <div className="avatar avatar--user">U</div>
+                      <div className="bubble bubble--user">
                         <MessagePrimitive.Parts />
                       </div>
                     </MessagePrimitive.Root>
@@ -99,11 +103,10 @@ export function OpenChamberChat() {
                 }
 
                 return (
-                  <MessagePrimitive.Root className="message-turn">
-                    <div className="message--assistant w-full">
-                      <MessagePrimitive.Parts
-                        components={messagePartsComponents}
-                      />
+                  <MessagePrimitive.Root className="msg-row">
+                    <div className="avatar avatar--ai">AI</div>
+                    <div className="bubble bubble--assistant">
+                      <MessagePrimitive.Parts components={messagePartsComponents} />
                     </div>
                   </MessagePrimitive.Root>
                 );
@@ -111,39 +114,51 @@ export function OpenChamberChat() {
             </ThreadPrimitive.Messages>
           </ThreadPrimitive.Viewport>
 
-          {/* Status row — shows while running */}
-          <AuiIf condition={(s) => s.thread.isRunning}>
-            <div className="status-bar flex h-8 items-center px-4 text-sm text-[var(--muted-foreground)]">
-              <span className="dot-pulse">●</span>
-              <span>Assistant is working...</span>
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-[var(--interactive-hover)]"
-                aria-label="Stop generation"
-              >
-                <StopCircle className="h-4 w-4" />
-                Stop
-              </button>
-            </div>
-          </AuiIf>
+          {/* Persistent status bar */}
+          <div className="status-bar--persistent">
+            <span
+              className={`status-dot ${isConnected ? "connected" : "disconnected"} ${isRunning ? "connecting" : ""}`}
+            />
+            <span className="agent-text">
+              {isConnected ? "Ready" : "Disconnected"}
+            </span>
+            <span className="agent-text ml-auto">{agentInfo || "Agent"}</span>
+            {isRunning && (
+              <>
+                <span className="dot-pulse">●</span>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-[var(--interactive-hover)]"
+                  aria-label="Stop generation"
+                >
+                  <StopCircle className="h-4 w-4" />
+                  Stop
+                </button>
+              </>
+            )}
+          </div>
 
-          {/* Composer */}
+          {/* Composer card */}
           <ThreadPrimitive.ViewportFooter>
-            <div className="composer border-t border-[var(--interactive-border)] bg-[var(--background)] p-4">
-              <div className="composer__inner mx-auto max-w-3xl">
-                <ComposerPrimitive.Root>
-                  <div className="composer__row flex items-end gap-2">
-                    <ComposerPrimitive.Input
-                      placeholder="Ask anything..."
-                      className="composer__input flex-1 resize-none rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-background)] px-4 py-2.5 text-sm outline-none transition-colors focus:border-[var(--interactive-border-focus)]"
-                      rows={1}
-                    />
-                    <ComposerPrimitive.Send className="composer__submit flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] transition-opacity hover:opacity-85 disabled:opacity-40">
-                      <ArrowUp className="h-4 w-4" />
-                    </ComposerPrimitive.Send>
+            <div className="composer-card">
+              <div className="composer-body">
+                <ComposerPrimitive.Input
+                  placeholder="Ask anything..."
+                  className="composer__input flex-1 resize-none rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-background)] px-4 py-2.5 text-sm outline-none transition-colors focus:border-[var(--interactive-border-focus)]"
+                  rows={1}
+                />
+                <ComposerPrimitive.Send className="composer__submit flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] transition-opacity hover:opacity-85 disabled:opacity-40">
+                  {isRunning ? <StopCircle className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
+                </ComposerPrimitive.Send>
+              </div>
+              <div className="composer-footer">
+                <div className="footer-left"></div>
+                <div className="footer-right">
+                  <div className="model-chip">
+                    <span>{agentInfo || "Model"}</span>
                   </div>
-                </ComposerPrimitive.Root>
+                </div>
               </div>
             </div>
           </ThreadPrimitive.ViewportFooter>
