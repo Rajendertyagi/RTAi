@@ -12,18 +12,24 @@ import { useEffect, useRef } from "react";
 import { useChatStore } from "../state/chatStore";
 import { ToolCard } from "./ToolCard";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
+import type { TextMessagePart } from "@assistant-ui/react";
 
 // Tool names are discovered at runtime from the backend (tool_start), so we
 // cannot map them to renderers by name. ToolCard is registered as the
 // fallback renderer instead: it renders every tool call with no dedicated UI.
 //
-// MarkdownTextPrimitive is cast because its props type doesn't exactly match
-// the TextMessagePart expected by MessagePrimitive.Parts — the runtime
-// behavior is correct; this is a strict typing mismatch in the SDK.
+// MarkdownTextWrapper bridges the type gap: MarkdownTextPrimitive expects
+// MarkdownTextPrimitiveProps but MessagePrimitive.Parts expects a component
+// that accepts TextMessagePart. The wrapper accepts TextMessagePart and
+// delegates to MarkdownTextPrimitive which handles the text internally.
+function MarkdownTextWrapper(props: TextMessagePart) {
+  return <MarkdownTextPrimitive {...props} />;
+}
+
 const messagePartsComponents = {
-  Text: MarkdownTextPrimitive,
+  Text: MarkdownTextWrapper,
   tools: { Fallback: ToolCard },
-} as unknown as Parameters<typeof MessagePrimitive.Parts>[0]["components"];
+} as const;
 
 // Auto-scroll to bottom when new messages arrive
 function useAutoScroll() {
