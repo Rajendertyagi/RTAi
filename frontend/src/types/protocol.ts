@@ -79,6 +79,27 @@ export type ToolContentBlock =
   | { type: "diff"; path: string; oldText?: string; newText: string }
   | { type: "terminal"; terminalId: string };
 
+export interface ToolCall {
+  id: string;
+  title?: string;
+  status: ToolStatus;
+  kind?: string;
+  content?: ToolContentBlock[];
+  locations?: ToolLocation[];
+  rawInput?: Record<string, unknown>;
+}
+
+export interface PermissionRequest {
+  permission_request_id: string;
+  tool_call_id: string;
+  options: PermissionOption[];
+  title?: string;
+  kind?: string;
+  raw_input?: Record<string, unknown>;
+  content?: ToolContentBlock[];
+  locations?: ToolLocation[];
+}
+
 export interface CapabilityItem {
   id: string;
   label: string;

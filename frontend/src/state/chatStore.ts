@@ -15,7 +15,7 @@ import type {
 export interface ChatState {
   // Connection
   connected: boolean;
-  connectionState: "disconnected" | "connecting" | "connected" | "error";
+  connectionState: "disconnected" | "connecting" | "connected";
   agentInfo: string;
 
   // Session
@@ -102,10 +102,13 @@ export const useChatStore = create<ChatState>()(
 
         switch (event.type) {
           case "status":
-            set({
-              connectionState: event.state,
-              connected: event.state === "ready",
-            });
+            if (event.state === "ready") {
+              set({ connectionState: "connected", connected: true });
+            } else if (event.state === "starting") {
+              set({ connectionState: "connecting" });
+            } else {
+              set({ connectionState: "disconnected", connected: false });
+            }
             break;
 
           case "agent_info":
@@ -186,20 +189,21 @@ export const useChatStore = create<ChatState>()(
 
           case "delta":
             if (event.session_id === state.sessionId && event.turn_id === state.activeTurnId) {
-              // Deduplicate by sequence
-              const lastMsg = state.messages[state.messages.length - 1];
-              if (lastMsg?.role === "assistant" && lastMsg.id === event.message_id) {
+              // Find or create assistant message for this turn
+              const assistantMsgIdx = state.messages.findLastIndex(
+                (m) => m.role === "assistant" && m.id === event.message_id
+              );
+              if (assistantMsgIdx >= 0) {
                 set({
                   messages: state.messages.map((m, i) =>
-                    i === state.messages.length - 1
+                    i === assistantMsgIdx
                       ? { ...m, text: m.text + event.text }
                       : m
                   ),
                 });
               } else {
-                // Create new assistant message
                 const newMessage = {
-                  id: event.message_id,
+                  id: `msg-${Date.now()}`,
                   role: "assistant" as const,
                   text: event.text,
                   tools: [],
@@ -207,7 +211,7 @@ export const useChatStore = create<ChatState>()(
                 };
                 set({
                   messages: [...state.messages, newMessage],
-                  activeMessageId: event.message_id,
+                  activeMessageId: newMessage.id,
                 });
               }
             }
@@ -229,11 +233,16 @@ export const useChatStore = create<ChatState>()(
                 locations: event.locations,
                 rawInput: event.raw_input,
               };
+              // Add to last assistant message or create new one
               set({
-                messages: state.messages.map((m) =>
-                  m.role === "assistant" && m.id === event.message_id
-                    ? { ...m, tools: [...m.tools, toolCall] }
-                    : m
+                messages: state.messages.map((m, i) => {
+                  if (i === state.messages.length - 1 && m.role === "assistant") {
+                    return { ...m, tools: [...m.tools, toolCall] };
+                  }
+                  return m;
+                }).concat(state.messages[state.messages.length - 1]?.role !== "assistant"
+                  ? [{ id: `msg-${Date.now()}`, role: "assistant" as const, text: "", tools: [toolCall], timestamp: Date.now() }]
+                  : []
                 ),
               });
             }
@@ -321,8 +330,6 @@ export const useChatStore = create<ChatState>()(
 
       selectAgent: (agentId: string) => {
         set({ selectedAgent: agentId });
-        const { send } = get();
-        // Note: actual send is via socket — this is a store-level notification
       },
 
       selectModel: (modelId: string) => {
