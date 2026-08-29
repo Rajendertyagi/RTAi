@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ...core.protocol import jsonable_model
+from ...core.protocol import acp_chunk_kind, jsonable_model, text_from_acp_chunk
 from ...logging_config import log_event, short_id
 from ..base import AgentAdapter, Emit, SelectionKind, SelectionResult
 from ..capabilities import (
@@ -92,6 +92,14 @@ class AcpSession(AgentAdapter):
         # Tool call ids already announced via tool_start; used to distinguish
         # the first sighting from subsequent streaming/final updates.
         self._seen_tool_calls: set[str] = set()
+        # Open streaming content part. A part is identified by a session-local
+        # counter rather than ACP's messageId: every chunk of one ACP message
+        # shares a messageId, so messageId alone cannot separate a thinking
+        # run from the reply that follows it. Rolling a new id whenever the
+        # chunk kind changes is what lets thinking and text interleave.
+        self._open_part_id: str | None = None
+        self._open_part_kind: str | None = None
+        self._part_seq = 0
 
     async def start(self, cwd: Path, emit: Emit) -> None:
         try:
@@ -188,6 +196,8 @@ class AcpSession(AgentAdapter):
             "acp_turn_completed",
             session=short_id(self._session_id),
         )
+        # The turn is over, so whatever part was streaming is finished too.
+        await self._close_open_part()
         await self._send({"type": "done"})
 
     async def cancel(self) -> None:
@@ -214,6 +224,8 @@ class AcpSession(AgentAdapter):
             )
         self._pending_permissions.clear()
         self._seen_tool_calls.clear()
+        self._open_part_id = None
+        self._open_part_kind = None
         if self._owned is not None:
             await self._owned.close()
         elif self._context is not None:
@@ -357,6 +369,54 @@ class AcpSession(AgentAdapter):
             if isinstance(commands, list):
                 self._capabilities.ingest_commands(commands)
         # Everything else already flowed out as raw debug events.
+
+    async def _close_open_part(self) -> None:
+        """Close the open content part, if any."""
+        if self._open_part_id is None:
+            return
+        await self._send({"type": "part_done", "part_id": self._open_part_id})
+        self._open_part_id = None
+        self._open_part_kind = None
+
+    async def _emit_content_part(self, update: Any) -> None:
+        """Stream an ACP content chunk as part_start / part_delta events.
+
+        Both ``AgentMessageChunk`` (the reply) and ``AgentThoughtChunk``
+        (chain-of-thought) reach the timeline here. Thinking was previously
+        dropped outright because only the message chunk was recognised.
+
+        A new part opens whenever the chunk kind changes, so a run of thinking
+        followed by a reply followed by more thinking becomes three parts in
+        true chronological order.
+        """
+        kind = acp_chunk_kind(update)
+        if kind is None:
+            return
+
+        if kind != self._open_part_kind:
+            await self._close_open_part()
+            self._part_seq += 1
+            self._open_part_id = f"part-{self._part_seq}"
+            self._open_part_kind = kind
+            await self._send(
+                {
+                    "type": "part_start",
+                    "part_id": self._open_part_id,
+                    "part_type": kind,
+                }
+            )
+
+        text = text_from_acp_chunk(update)
+        if not text:
+            return
+        await self._send(
+            {"type": "part_delta", "part_id": self._open_part_id, "text": text}
+        )
+        # Legacy path: the UI still renders one concatenated text blob until
+        # the frontend moves to parts. Only the reply belongs in it - thinking
+        # was never part of it before, so it stays out.
+        if kind == "text":
+            await self._send({"type": "delta", "text": text})
 
     async def _emit_tool_event(self, dumped: dict[str, Any]) -> None:
         """Map ACP tool-call session updates to Protocol v1 tool events.

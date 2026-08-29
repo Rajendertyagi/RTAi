@@ -53,3 +53,32 @@ def text_from_acp_update(update: Any) -> str | None:
     content = getattr(update, "content", None)
     text = getattr(content, "text", None)
     return text if isinstance(text, str) else None
+
+
+# ACP content chunk class name -> RTAI part type.
+#
+# ACP streams two kinds of content chunk and both carry text:
+#   AgentMessageChunk - the reply the user is meant to read
+#   AgentThoughtChunk - chain-of-thought ("thinking")
+# Thinking was previously discarded everywhere because only the message
+# chunk was ever recognised.
+_ACP_CHUNK_KINDS = {
+    "AgentMessageChunk": "text",
+    "AgentThoughtChunk": "reasoning",
+}
+
+
+def acp_chunk_kind(update: Any) -> str | None:
+    """Return the RTAI part type for an ACP content chunk, or None.
+
+    Returning None means the update is not streamed content (a tool call, a
+    mode change, a plan update...) and belongs to a different event path.
+    """
+    return _ACP_CHUNK_KINDS.get(type(update).__name__)
+
+
+def text_from_acp_chunk(update: Any) -> str | None:
+    """Text carried by any ACP content chunk, message or thought."""
+    content = getattr(update, "content", None)
+    text = getattr(content, "text", None)
+    return text if isinstance(text, str) else None

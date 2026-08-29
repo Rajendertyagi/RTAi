@@ -73,11 +73,30 @@ export interface PermissionRequest {
   locations?: ToolLocation[];
 }
 
+// A message is an ordered list of parts rather than one text blob, so
+// thinking, tool activity and reply text can appear in the order they
+// happened. Part ids are session-local and opaque.
+export type MessagePartType = "text" | "reasoning" | "tool";
+
+export interface MessagePart {
+  id: string;
+  type: MessagePartType;
+  // Accumulated text for text/reasoning parts.
+  text: string;
+  // True once the backend sent part_done for this part.
+  done: boolean;
+  // Present when type is "tool"; mirrors the tool timeline entry.
+  tool?: ToolCall;
+}
+
 export interface Message {
   id: string;
   role: Role;
   text: string;
   status: MessageStatus;
+  // Ordered part timeline. Populated from part_start/part_delta/part_done and
+  // tool events. Empty until the backend emits parts for this message.
+  parts?: MessagePart[];
   tools?: ToolCall[];
   attachments?: AttachmentRef[];
   permission?: PermissionRequest;
@@ -123,6 +142,9 @@ export type ServerEvent =
   | { type: "commands_available"; commands?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "user_message"; text: string }
   | { type: "delta"; text: string; sequence?: number }
+  | { type: "part_start"; part_id: string; part_type: MessagePartType }
+  | { type: "part_delta"; part_id: string; text: string }
+  | { type: "part_done"; part_id: string }
   | { type: "done"; reason?: "completed" | "cancelled" | "error" }
   | { type: "tool_start"; tool_call_id: string; title: string; status?: ToolStatus; kind?: string; locations?: ToolLocation[]; raw_input?: unknown }
   | { type: "tool_update"; tool_call_id: string; status?: ToolStatus; content?: ToolContent[]; locations?: ToolLocation[] }

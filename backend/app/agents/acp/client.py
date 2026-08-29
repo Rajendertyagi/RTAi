@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ...core.protocol import jsonable_model, text_from_acp_update
+from ...core.protocol import jsonable_model
 from ...logging_config import log_event, short_id
 from .mapping import permission_option, permission_tool_details, tool_call_id_of
 
@@ -96,9 +96,7 @@ def create_client_class() -> type:
                     "data": dumped,
                 }
             )
-            text = text_from_acp_update(update)
-            if text:
-                await owner._send({"type": "delta", "text": text})
+            await owner._emit_content_part(update)
             owner._ingest_notification(dumped)
             await owner._emit_tool_event(dumped)
             if dumped.get("sessionUpdate") == "available_commands_update":
