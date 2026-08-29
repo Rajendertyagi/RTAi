@@ -1,10 +1,14 @@
 import { RtaiRuntimeProvider } from "./runtime/RtaiRuntimeProvider";
-import { OpenChamberChat } from "./components/OpenChamberChat";
+import { Sidebar } from "./components/Sidebar";
+import { ChatPanel } from "./components/ChatPanel";
 
 export function App() {
   return (
     <RtaiRuntimeProvider>
-      <OpenChamberChat />
+      <div className="app">
+        <Sidebar />
+        <ChatPanel />
+      </div>
     </RtaiRuntimeProvider>
   );
 }

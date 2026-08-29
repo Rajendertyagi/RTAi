@@ -16,10 +16,14 @@ import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 // Tool names are discovered at runtime from the backend (tool_start), so we
 // cannot map them to renderers by name. ToolCard is registered as the
 // fallback renderer instead: it renders every tool call with no dedicated UI.
+//
+// MarkdownTextPrimitive is cast because its props type doesn't exactly match
+// the TextMessagePart expected by MessagePrimitive.Parts — the runtime
+// behavior is correct; this is a strict typing mismatch in the SDK.
 const messagePartsComponents = {
   Text: MarkdownTextPrimitive,
   tools: { Fallback: ToolCard },
-} as const;
+} as unknown as Parameters<typeof MessagePrimitive.Parts>[0]["components"];
 
 // Auto-scroll to bottom when new messages arrive
 function useAutoScroll() {
