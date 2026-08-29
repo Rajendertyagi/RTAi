@@ -157,6 +157,7 @@ class TestEventMapping(unittest.IsolatedAsyncioTestCase):
         # Agents are NOT modes.
         self.assertFalse(snap.modes.available)
         self.assertEqual(snap.modes.items, ())
+        await adapter.close()
 
     async def test_modes_unavailable_without_server_endpoint(self) -> None:
         adapter = _make_adapter()
@@ -169,6 +170,7 @@ class TestEventMapping(unittest.IsolatedAsyncioTestCase):
         # no mode config option; they would be unavailable if we couldn't
         # query the endpoint at all. The key is they are not populated
         # from /agent data.
+        await adapter.close()
 
     async def test_thinking_unavailable_when_no_variants(self) -> None:
         adapter = _make_adapter()
@@ -179,6 +181,7 @@ class TestEventMapping(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(snap.thinking_options.available)
         assert snap.thinking_options.unavailable is not None
         self.assertIn("variants", snap.thinking_options.unavailable.message.lower())
+        await adapter.close()
 
 
 class TestForeignSessionFiltering(unittest.IsolatedAsyncioTestCase):
