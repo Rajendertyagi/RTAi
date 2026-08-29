@@ -69,7 +69,10 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 | Feature | Status |
 |---|---|
 | Tool timeline UI | complete |
+| Live tool streaming (`tool_update`) with throttled append-only output | complete |
+| Rich tool cards (kind icons, command, diff preview, locations, error boundary) | complete |
 | Permission dialog returning real outcomes | complete |
+| Permission card enriched with tool details (title/kind/raw_input/content/locations) | complete |
 | Slash-command autocomplete (`commands_available`) | complete |
 | Permission result contract tests | planned |
 

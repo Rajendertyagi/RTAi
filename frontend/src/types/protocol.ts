@@ -10,7 +10,19 @@ export type MessageStatus = "complete" | "streaming" | "error";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
-export type ToolStatus = "pending" | "running" | "success" | "error" | "cancelled";
+export type ToolStatus = "pending" | "running" | "success" | "error" | "cancelled" | "aborted" | "timeout";
+
+// Tool-call content blocks, mirroring the ACP discriminated union. The UI
+// renders each type distinctly; content is always untrusted data.
+export type ToolContent =
+  | { type: "content"; text?: string }
+  | { type: "diff"; path: string; oldText?: string; newText: string }
+  | { type: "terminal"; terminalId: string };
+
+export interface ToolLocation {
+  path: string;
+  line?: number;
+}
 
 export interface CapabilityItem {
   id: string;
@@ -42,13 +54,23 @@ export interface ToolCall {
   id: string;
   title?: string;
   status: ToolStatus;
-  content?: unknown;
+  // ACP ToolKind (read/edit/execute/...) — drives icon and content rendering.
+  kind?: string;
+  content?: ToolContent[];
+  locations?: ToolLocation[];
+  rawInput?: unknown;
 }
 
 export interface PermissionRequest {
   permission_request_id: string;
   tool_call_id: string;
   options: CapabilityItem[];
+  // Additive tool details so the card can show what is being approved.
+  title?: string;
+  kind?: string;
+  raw_input?: unknown;
+  content?: ToolContent[];
+  locations?: ToolLocation[];
 }
 
 export interface Message {
@@ -102,9 +124,10 @@ export type ServerEvent =
   | { type: "user_message"; text: string }
   | { type: "delta"; text: string; sequence?: number }
   | { type: "done"; reason?: "completed" | "cancelled" | "error" }
-  | { type: "tool_start"; tool_call_id: string; title: string; status?: ToolStatus }
-  | { type: "tool_result"; tool_call_id: string; status: ToolStatus; content?: unknown }
-  | { type: "permission_request"; permission_request_id: string; tool_call_id: string; options: CapabilityItem[] }
+  | { type: "tool_start"; tool_call_id: string; title: string; status?: ToolStatus; kind?: string; locations?: ToolLocation[]; raw_input?: unknown }
+  | { type: "tool_update"; tool_call_id: string; status?: ToolStatus; content?: ToolContent[]; locations?: ToolLocation[] }
+  | { type: "tool_result"; tool_call_id: string; status: ToolStatus; content?: ToolContent[]; locations?: ToolLocation[] }
+  | { type: "permission_request"; permission_request_id: string; tool_call_id: string; options: CapabilityItem[]; title?: string; kind?: string; raw_input?: unknown; content?: ToolContent[]; locations?: ToolLocation[] }
   | { type: "permission_result"; permission_request_id: string; option_id?: string }
   | { type: "raw"; event: string; data: unknown };
 

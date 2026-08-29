@@ -290,36 +290,43 @@ Correlation: turn-scoped.
 |---|---|
 | Direction | backend → ui |
 | Required | `session_id`, `turn_id`, `tool_call_id`, `title` |
-| Optional | `kind`, `status`, `content`, envelope extras |
+| Optional | `kind`, `status`, `locations`, `raw_input`, envelope extras |
 
 ```json
 {"protocol_version": 1, "type": "tool_start",
  "session_id": "s", "turn_id": "t",
- "tool_call_id": "tc1", "title": "read_file", "kind": "read"}
+ "tool_call_id": "tc1", "title": "read_file", "kind": "read",
+ "locations": [{"path": "src/app.ts", "line": 42}],
+ "raw_input": {"path": "src/app.ts"}}
 ```
 
 UI: timeline entry. Content is untrusted data — never rendered unescaped.
+`kind` is the ACP ToolKind / server tool name (drives icon and rendering);
+`locations` are `{path, line?}` references; `raw_input` is the tool's input.
 
 ### tool_update
 
 Required: `session_id`, `turn_id`, `tool_call_id`.
-Optional: `title`, `status`, `content`, envelope extras.
+Optional: `status`, `content`, `locations`, envelope extras.
 
 ```json
 {"protocol_version": 1, "type": "tool_update",
  "session_id": "s", "turn_id": "t", "tool_call_id": "tc1",
- "status": "running", "content": {"path": "src/app.ts"}}
+ "status": "running",
+ "content": [{"type": "content", "text": "…streaming output…"}]}
 ```
 
-UI: live update of the matching entry. Turn-scoped correlation.
+UI: live update of the matching entry. `content` is a typed block array (see
+below); while a tool runs the UI streams it and highlights it once final.
+Turn-scoped correlation.
 
 ### tool_result
 
 | | |
 |---|---|
 | Direction | backend → ui |
-| Required | `session_id`, `turn_id`, `tool_call_id`, `status` (`success`\|`error`\|`cancelled`) |
-| Optional | `content`, `error_message`, envelope extras |
+| Required | `session_id`, `turn_id`, `tool_call_id`, `status` (`success`\|`error`\|`cancelled`\|`aborted`\|`timeout`) |
+| Optional | `content`, `locations`, `error_message`, envelope extras |
 
 ```json
 {"protocol_version": 1, "type": "tool_result",
@@ -329,25 +336,43 @@ UI: live update of the matching entry. Turn-scoped correlation.
 
 UI: close entry; cancelled renders distinctly; content treated as untrusted.
 
+### Tool content blocks
+
+`content` on `tool_start`/`tool_update`/`tool_result`/`permission_request` is
+an array of typed blocks mirroring the ACP discriminated union:
+
+| `type` | Fields | Rendered as |
+|---|---|---|
+| `content` | `text?` | plain text (streamed live while running) |
+| `diff` | `path`, `oldText?`, `newText` | line diff preview |
+| `terminal` | `terminalId` | placeholder (no terminal widget yet) |
+
+`locations` is an array of `{path, line?}`. Paths may be absolute; the UI
+renders them relative to the session `cwd` when possible.
+
 ### permission_request
 
 | | |
 |---|---|
 | Direction | backend → ui |
 | Required | `session_id`, `turn_id`, `permission_request_id`, `tool_call_id`, `options`: `{id, label}` list (`description?`, `kind?` allowed) |
-| Optional | envelope extras |
+| Optional | `title`, `kind`, `raw_input`, `content`, `locations`, envelope extras |
 
 ```json
 {"protocol_version": 1, "type": "permission_request",
  "session_id": "s", "turn_id": "t",
  "permission_request_id": "perm-1", "tool_call_id": "tc1",
+ "title": "bash", "kind": "execute",
+ "raw_input": {"command": "git status"},
  "options": [{"id": "allow_once", "label": "Allow once", "kind": "allow_once"}]}
 ```
 
-UI: dialog built from the provided options. Option `kind` (when present)
-hints at the nature of the choice — `allow_once`/`allow_always`/
-`reject_once`/`reject_always` — and lets the UI auto-approve requests when the
-user enables auto-accept. Option ids are data, never hard-coded in components.
+UI: dialog built from the provided options, enriched with the additive tool
+details (`title`/`kind`/`raw_input`/`content`/`locations`) so the user sees
+exactly what is being approved. Option `kind` (when present) hints at the
+nature of the choice — `allow_once`/`allow_always`/`reject_once`/
+`reject_always` — and lets the UI auto-approve requests when the user enables
+auto-accept. Option ids are data, never hard-coded in components.
 
 ### permission_result
 

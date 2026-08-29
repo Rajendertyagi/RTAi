@@ -54,6 +54,105 @@ def _permission_option(option: Any, index: int) -> dict[str, str]:
     return item
 
 
+# ACP ToolCallStatus -> Protocol v1 ToolStatus.
+_TOOL_STATUS_MAP = {
+    "pending": "pending",
+    "in_progress": "running",
+    "completed": "success",
+    "failed": "error",
+}
+
+
+def _map_tool_status(status: Any) -> str | None:
+    """Map an ACP tool-call status to a Protocol v1 ToolStatus."""
+    if not isinstance(status, str):
+        return None
+    return _TOOL_STATUS_MAP.get(status, status)
+
+
+def _map_tool_content(content: Any) -> list[dict[str, Any]] | None:
+    """Map ACP tool-call content blocks to a typed Protocol v1 shape.
+
+    ACP content is a discriminated union of ``content`` (text), ``diff``
+    (file edit) and ``terminal`` (terminal reference) blocks. The UI renders
+    these directly; nothing else from the ACP payload is forwarded.
+    """
+    if not isinstance(content, list):
+        return None
+    blocks: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "content":
+            item: dict[str, Any] = {"type": "content"}
+            text = block.get("text")
+            if isinstance(text, str):
+                item["text"] = text
+            blocks.append(item)
+        elif block_type == "diff":
+            item: dict[str, Any] = {"type": "diff", "path": str(block.get("path", ""))}
+            old_text = block.get("oldText")
+            new_text = block.get("newText")
+            if isinstance(old_text, str):
+                item["oldText"] = old_text
+            if isinstance(new_text, str):
+                item["newText"] = new_text
+            blocks.append(item)
+        elif block_type == "terminal":
+            blocks.append(
+                {"type": "terminal", "terminalId": str(block.get("terminalId", ""))}
+            )
+    return blocks or None
+
+
+def _map_tool_locations(locations: Any) -> list[dict[str, Any]] | None:
+    """Map ACP ToolCallLocation entries to ``{path, line?}`` items."""
+    if not isinstance(locations, list):
+        return None
+    items: list[dict[str, Any]] = []
+    for loc in locations:
+        if not isinstance(loc, dict):
+            continue
+        path = loc.get("path")
+        if not isinstance(path, str):
+            continue
+        item: dict[str, Any] = {"path": path}
+        line = loc.get("line")
+        if isinstance(line, int):
+            item["line"] = line
+        items.append(item)
+    return items or None
+
+
+def _permission_tool_details(tool_call: Any) -> dict[str, Any]:
+    """Extract additive tool details for a permission_request event.
+
+    The ACP SDK hands ``request_permission`` the full ToolCallUpdate model;
+    forwarding its title/kind/rawInput/content/locations lets the permission
+    card show exactly what is being approved. All fields are optional.
+    """
+    details: dict[str, Any] = {}
+    dumped = jsonable_model(tool_call)
+    if not isinstance(dumped, dict):
+        return details
+    title = dumped.get("title")
+    if isinstance(title, str) and title:
+        details["title"] = title
+    kind = dumped.get("kind")
+    if isinstance(kind, str) and kind:
+        details["kind"] = kind
+    if "rawInput" in dumped:
+        details["raw_input"] = dumped.get("rawInput")
+    content = _map_tool_content(dumped.get("content"))
+    if content:
+        details["content"] = content
+    locations = _map_tool_locations(dumped.get("locations"))
+    if locations:
+        details["locations"] = locations
+    return details
+
+
 class OpenCodeSession(AgentAdapter):
     """Adapter around the official ACP Python SDK for one OpenCode child.
 
@@ -75,6 +174,9 @@ class OpenCodeSession(AgentAdapter):
         self._capabilities = AcpCapabilityState()
         self._load_session_cap: bool | None = None
         self._pending_permissions: dict[str, Any] = {}
+        # Tool call ids already announced via tool_start; used to distinguish
+        # the first sighting from subsequent streaming/final updates.
+        self._seen_tool_calls: set[str] = set()
 
     async def start(self, cwd: Path, emit: Emit) -> None:
         try:
@@ -130,6 +232,7 @@ class OpenCodeSession(AgentAdapter):
                             _permission_option(o, i)
                             for i, o in enumerate(options)
                         ],
+                        **_permission_tool_details(tool_call),
                     }
                 )
                 log_event(
@@ -170,6 +273,7 @@ class OpenCodeSession(AgentAdapter):
                 if text:
                     await owner._send({"type": "delta", "text": text})
                 owner._ingest_notification(dumped)
+                await owner._emit_tool_event(dumped)
                 if dumped.get("sessionUpdate") == "available_commands_update":
                     await owner._emit_commands_available()
 
@@ -404,6 +508,76 @@ class OpenCodeSession(AgentAdapter):
             if isinstance(commands, list):
                 self._capabilities.ingest_commands(commands)
         # Everything else already flowed out as raw debug events.
+
+    async def _emit_tool_event(self, dumped: dict[str, Any]) -> None:
+        """Map ACP tool-call session updates to Protocol v1 tool events.
+
+        ACP announces tool activity through ``tool_call`` (ToolCallStart) and
+        ``tool_call_update`` (ToolCallProgress) session updates. The first
+        sighting of a tool call id becomes ``tool_start``; in-progress updates
+        stream as ``tool_update``; completed/failed updates close with
+        ``tool_result``. Content blocks and locations are forwarded in a typed
+        shape the UI renders directly.
+        """
+        if not isinstance(dumped, dict):
+            return
+        session_update = dumped.get("sessionUpdate")
+        if session_update not in ("tool_call", "tool_call_update"):
+            # A bare ToolCallUpdate carries no sessionUpdate; accept it when a
+            # toolCallId plus at least one tool field is present.
+            if "toolCallId" not in dumped or not any(
+                key in dumped
+                for key in ("kind", "status", "title", "content", "locations", "rawInput")
+            ):
+                return
+        tool_call_id = dumped.get("toolCallId")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            return
+        status = _map_tool_status(dumped.get("status"))
+        content = _map_tool_content(dumped.get("content"))
+        locations = _map_tool_locations(dumped.get("locations"))
+
+        if tool_call_id not in self._seen_tool_calls:
+            self._seen_tool_calls.add(tool_call_id)
+            event: dict[str, Any] = {
+                "type": "tool_start",
+                "tool_call_id": tool_call_id,
+                "title": dumped.get("title") or "tool",
+                "status": status or "running",
+            }
+            kind = dumped.get("kind")
+            if isinstance(kind, str):
+                event["kind"] = kind
+            if locations:
+                event["locations"] = locations
+            if "rawInput" in dumped:
+                event["raw_input"] = dumped.get("rawInput")
+            await self._send(event)
+            return
+
+        if status in ("success", "error"):
+            event = {
+                "type": "tool_result",
+                "tool_call_id": tool_call_id,
+                "status": status,
+            }
+            if content:
+                event["content"] = content
+            if locations:
+                event["locations"] = locations
+            await self._send(event)
+            return
+
+        event = {
+            "type": "tool_update",
+            "tool_call_id": tool_call_id,
+            "status": status or "running",
+        }
+        if content:
+            event["content"] = content
+        if locations:
+            event["locations"] = locations
+        await self._send(event)
 
     async def select(
         self, kind: SelectionKind, value_id: str

@@ -79,8 +79,20 @@ type Action =
 function appendTool(message: Message, tool: ToolCall): Message {
   const tools = message.tools ? [...message.tools] : [];
   const idx = tools.findIndex((t) => t.id === tool.id);
-  if (idx >= 0) tools[idx] = { ...tools[idx], ...tool };
-  else tools.push(tool);
+  if (idx >= 0) {
+    const existing = tools[idx];
+    const merged: ToolCall = { ...existing, ...tool };
+    // Only overwrite optional fields when the update actually carries them;
+    // a bare status change must not wipe content/locations from earlier.
+    if (tool.content === undefined) merged.content = existing.content;
+    if (tool.locations === undefined) merged.locations = existing.locations;
+    if (tool.kind === undefined) merged.kind = existing.kind;
+    if (tool.rawInput === undefined) merged.rawInput = existing.rawInput;
+    if (tool.title === undefined) merged.title = existing.title;
+    tools[idx] = merged;
+  } else {
+    tools.push(tool);
+  }
   return { ...message, tools };
 }
 
@@ -253,9 +265,14 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
 
     case "done": {
       if (!state.activeMessageId) return { ...state, generating: false };
-      const messages = state.messages.map((m) =>
-        m.id === state.activeMessageId ? { ...m, status: "complete" as const } : m,
-      );
+      const messages = state.messages.map((m) => {
+        if (m.id !== state.activeMessageId) return m;
+        // Cancel any tool rows still running when the turn ends.
+        const tools = m.tools?.map((t) =>
+          t.status === "running" || t.status === "pending" ? { ...t, status: "cancelled" as const } : t,
+        );
+        return { ...m, status: "complete" as const, tools };
+      });
       return { ...state, messages, generating: false, activeMessageId: null };
     }
 
@@ -263,7 +280,29 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       if (!state.activeMessageId) return state;
       const messages = state.messages.map((m) =>
         m.id === state.activeMessageId
-          ? appendTool(m, { id: event.tool_call_id, title: event.title, status: event.status ?? "running" })
+          ? appendTool(m, {
+              id: event.tool_call_id,
+              title: event.title,
+              status: event.status ?? "running",
+              kind: event.kind,
+              locations: event.locations,
+              rawInput: event.raw_input,
+            })
+          : m,
+      );
+      return { ...state, messages };
+    }
+
+    case "tool_update": {
+      if (!state.activeMessageId) return state;
+      const messages = state.messages.map((m) =>
+        m.id === state.activeMessageId
+          ? appendTool(m, {
+              id: event.tool_call_id,
+              status: event.status ?? "running",
+              content: event.content,
+              locations: event.locations,
+            })
           : m,
       );
       return { ...state, messages };
@@ -273,7 +312,12 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       if (!state.activeMessageId) return state;
       const messages = state.messages.map((m) =>
         m.id === state.activeMessageId
-          ? appendTool(m, { id: event.tool_call_id, status: event.status, content: event.content })
+          ? appendTool(m, {
+              id: event.tool_call_id,
+              status: event.status,
+              content: event.content,
+              locations: event.locations,
+            })
           : m,
       );
       return { ...state, messages };
@@ -283,7 +327,19 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
       if (!state.activeMessageId) return state;
       const messages = state.messages.map((m) =>
         m.id === state.activeMessageId
-          ? { ...m, permission: { permission_request_id: event.permission_request_id, tool_call_id: event.tool_call_id, options: event.options } }
+          ? {
+              ...m,
+              permission: {
+                permission_request_id: event.permission_request_id,
+                tool_call_id: event.tool_call_id,
+                options: event.options,
+                title: event.title,
+                kind: event.kind,
+                raw_input: event.raw_input,
+                content: event.content,
+                locations: event.locations,
+              },
+            }
           : m,
       );
       return { ...state, messages };

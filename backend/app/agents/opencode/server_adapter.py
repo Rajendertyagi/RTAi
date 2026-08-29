@@ -170,6 +170,8 @@ class OpenCodeServerAdapter(AgentAdapter):
         self._completed_emitted = False
         self._error_emitted = False
         self._sent_part_offsets: dict[str, int] = {}
+        # Tool call ids already announced this turn (first sighting => tool_start).
+        self._seen_tool_calls: set[str] = set()
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -443,6 +445,7 @@ class OpenCodeServerAdapter(AgentAdapter):
         if not self._session_id:
             raise RuntimeError("OpenCode server session is not ready")
         self._sent_part_offsets.clear()
+        self._seen_tool_calls.clear()
         self._awaiting_idle = True
         self._completed_emitted = False
         self._error_emitted = False
@@ -736,6 +739,9 @@ class OpenCodeServerAdapter(AgentAdapter):
             raw_part = properties.get("part")
             part: dict[str, Any] = raw_part if isinstance(raw_part, dict) else {}
             part_type = part.get("type")
+            if part_type == "tool":
+                await self._emit_tool_event(part)
+                return True
             if part_type is not None and part_type != "text":
                 return True
             part_id = part.get("id")
@@ -803,6 +809,65 @@ class OpenCodeServerAdapter(AgentAdapter):
         # The caller records the precise benchmark failure reason so a single
         # drop is never counted twice.
 
+    async def _emit_tool_event(self, part: dict[str, Any]) -> None:
+        """Map an OpenCode server tool part to Protocol v1 tool events.
+
+        The server protocol announces tool activity through
+        ``message.part.updated`` events whose part has ``type == "tool"``.
+        The first sighting of a call id becomes ``tool_start``; running
+        updates stream as ``tool_update``; completed/error states close with
+        ``tool_result``. Mirrors the ACP adapter's mapping so both adapters
+        emit the same protocol shape.
+        """
+        if self._emit is None:
+            return
+        call_id = part.get("callID")
+        if not isinstance(call_id, str) or not call_id:
+            return
+        state = part.get("state")
+        state = state if isinstance(state, dict) else {}
+        status = _server_tool_status(state.get("status"))
+        tool = part.get("tool")
+        tool_name = tool if isinstance(tool, str) else "tool"
+        title = state.get("title")
+        title = title if isinstance(title, str) and title else tool_name
+        content = _server_tool_content(state.get("output"))
+        raw_input = state.get("input")
+
+        if call_id not in self._seen_tool_calls:
+            self._seen_tool_calls.add(call_id)
+            event: dict[str, Any] = {
+                "type": "tool_start",
+                "tool_call_id": call_id,
+                "title": title,
+                "status": status or "running",
+                "kind": tool_name,
+            }
+            if raw_input is not None:
+                event["raw_input"] = raw_input
+            await self._emit(event)
+            return
+
+        if status in ("success", "error"):
+            event = {
+                "type": "tool_result",
+                "tool_call_id": call_id,
+                "status": status,
+            }
+            if content:
+                event["content"] = content
+            await self._emit(event)
+            return
+
+        event = {
+            "type": "tool_update",
+            "tool_call_id": call_id,
+            "status": status or "running",
+        }
+        if content:
+            event["content"] = content
+        await self._emit(event)
+
     async def _shutdown_owned(self) -> None:
         if self._owned is not None:
             pid = self._owned.pid
@@ -826,6 +891,34 @@ def _session_id_from(event_type: str, properties: dict[str, Any]) -> str | None:
         nested = info.get("sessionID")
         if isinstance(nested, str):
             return nested
+    return None
+
+
+def _server_tool_status(status: Any) -> str | None:
+    """Map server ToolState.status to Protocol v1 ToolStatus."""
+    if status == "pending":
+        return "pending"
+    if status == "running":
+        return "running"
+    if status == "completed":
+        return "success"
+    if status == "error":
+        return "error"
+    return None
+
+
+def _server_tool_content(output: Any) -> list[dict[str, Any]] | None:
+    """Map server tool output (string or block array) to content blocks."""
+    if isinstance(output, str):
+        return [{"type": "content", "text": output}] if output else None
+    if isinstance(output, list):
+        blocks: list[dict[str, Any]] = []
+        for item in output:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    blocks.append({"type": "content", "text": text})
+        return blocks or None
     return None
 
 

@@ -10,15 +10,10 @@ import remarkGfm from "remark-gfm";
 import { useChat } from "../state/ChatContext";
 import type { Message } from "../types/protocol";
 import { CodeBlock } from "./CodeBlock";
+import { ToolCallCard } from "./ToolCallCard";
+import { PermissionCard } from "./PermissionCard";
+import { ToolErrorBoundary } from "./ToolErrorBoundary";
 import { useColorScheme } from "../hooks/useColorScheme";
-
-const TOOL_LABEL: Record<string, string> = {
-  pending: "Queued",
-  running: "Running",
-  success: "Done",
-  error: "Failed",
-  cancelled: "Cancelled",
-};
 
 /** Flatten rendered React children back to their plain text. */
 function nodeToText(node: ReactNode): string {
@@ -55,8 +50,9 @@ function readFencedCode(children: ReactNode): { code: string; language: string |
 }
 
 export function MessageBubble({ message }: { message: Message }) {
-  const { respondPermission } = useChat();
+  const { state } = useChat();
   const scheme = useColorScheme();
+  const cwd = state.cwd;
 
   // Authoritative completion state: set by the `done` event, not inferred
   // from whether a closing fence happens to have arrived yet.
@@ -96,31 +92,14 @@ export function MessageBubble({ message }: { message: Message }) {
         {message.tools && message.tools.length > 0 && (
           <div className="tool-timeline">
             {message.tools.map((t) => (
-              <div key={t.id} className={`tool-call ${t.status}`}>
-                <span className="tool-title">{t.title}</span>
-                <span className="tool-status">{TOOL_LABEL[t.status] ?? t.status}</span>
-              </div>
+              <ToolErrorBoundary key={t.id}>
+                <ToolCallCard tool={t} cwd={cwd} />
+              </ToolErrorBoundary>
             ))}
           </div>
         )}
 
-        {message.permission && (
-          <div className="permission-dialog">
-            <div className="permission-title">Permission required</div>
-            <div className="permission-options">
-              {message.permission.options.map((o) => (
-                <button
-                  key={o.id}
-                  className="permission-option"
-                  type="button"
-                  onClick={() => respondPermission(message.permission!.permission_request_id, o.id)}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        {message.permission && <PermissionCard permission={message.permission} cwd={cwd} />}
       </div>
     </div>
   );
