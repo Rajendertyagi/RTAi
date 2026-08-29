@@ -1,6 +1,7 @@
 import {
   useExternalStoreRuntime,
   type AppendMessage,
+  type ThreadAssistantMessagePart,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import type { ReadonlyJSONObject } from "assistant-stream/utils";
@@ -33,7 +34,7 @@ function argsFromRawInput(rawInput: unknown): { args: ReadonlyJSONObject; argsTe
   return { args: {}, argsText: text };
 }
 
-function convertPart(part: MessagePart): ThreadMessageLike["content"][number] | null {
+function convertPart(part: MessagePart): ThreadAssistantMessagePart | null {
   switch (part.type) {
     case "text":
       return { type: "text", text: part.text };
@@ -73,9 +74,9 @@ export function convertMessage(message: Message): ThreadMessageLike {
   // The backend emits parts for every turn; the text blob is the fallback for
   // messages that arrived before part events were wired up.
   const hasParts = Boolean(message.parts && message.parts.length > 0);
-  const content = hasParts
+  const content: readonly ThreadAssistantMessagePart[] = hasParts
     ? message.parts!.map(convertPart).filter(
-        (p): p is NonNullable<typeof p> => p !== null,
+        (p): p is ThreadAssistantMessagePart => p !== null,
       )
     : [{ type: "text" as const, text: message.text }];
 
