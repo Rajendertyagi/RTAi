@@ -24,7 +24,7 @@ from .owned_process import OwnedProcess
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
-SelectionKind = Literal["model", "mode", "thinking"]
+SelectionKind = Literal["model", "mode", "thinking", "agent"]
 
 
 @dataclass(frozen=True)

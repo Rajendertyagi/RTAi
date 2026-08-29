@@ -33,6 +33,9 @@ export interface ChatState {
   thinkingLevel: string;
   activeMessageId: string | null;
   sessions: SessionItem[];
+  // Agent identity announced by the backend (agent_info) — shown for
+  // diagnostics; distinct from the selectable agents list.
+  agentInfo: string;
   // When on, incoming permission prompts are answered automatically with the
   // option the backend marked as `kind: "allow"`.
   autoAccept: boolean;
@@ -61,6 +64,7 @@ const initialState: ChatState = {
   thinkingLevel: "off",
   activeMessageId: null,
   sessions: [{ id: "session-1", title: "Current Session", active: true }],
+  agentInfo: "",
   autoAccept: storedAutoAccept(),
 };
 
@@ -165,6 +169,9 @@ function reduceEvent(state: ChatState, event: ServerEvent): ChatState {
           { id: nextId("msg"), role: "error", text: event.message, status: "error" },
         ],
       };
+
+    case "agent_info":
+      return { ...state, agentInfo: event.name };
 
     case "agents_available": {
       const agents = event.agents ?? [];

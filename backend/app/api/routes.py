@@ -392,26 +392,29 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     value_id=short_id(value_id),
                 )
                 result = await adapter.select(selection_kind, value_id or "")
-                # Emit the authoritative selected-state event.
-                selected_event: dict[str, Any] = {
-                    "type": f"{selection_kind}_selected",
-                    "session_id": raw["session_id"],
-                }
-                if kind == "select_agent":
-                    selected_event["agent_id"] = value_id
-                elif kind == "select_model":
-                    selected_event["model_id"] = value_id
-                    # Refresh thinking if model-specific levels changed.
-                    snap2 = adapter.capability_snapshot()
-                    for ev in snapshot_to_v1_events(snap2):
-                        if ev.get("type") == "thinking_available":
-                            await emit(ev)
-                            break
-                elif kind == "select_mode":
-                    selected_event["mode_id"] = value_id
-                elif kind == "set_thinking":
-                    selected_event["level"] = value_id
-                await emit(selected_event)
+                # Emit the authoritative selected-state event only when the
+                # adapter actually applied the selection; a rejected value must
+                # never be recorded by the UI (e.g. an unknown agent id).
+                if result.applied:
+                    selected_event: dict[str, Any] = {
+                        "type": f"{selection_kind}_selected",
+                        "session_id": raw["session_id"],
+                    }
+                    if kind == "select_agent":
+                        selected_event["agent_id"] = value_id
+                    elif kind == "select_model":
+                        selected_event["model_id"] = value_id
+                        # Refresh thinking if model-specific levels changed.
+                        snap2 = adapter.capability_snapshot()
+                        for ev in snapshot_to_v1_events(snap2):
+                            if ev.get("type") == "thinking_available":
+                                await emit(ev)
+                                break
+                    elif kind == "select_mode":
+                        selected_event["mode_id"] = value_id
+                    elif kind == "set_thinking":
+                        selected_event["level"] = value_id
+                    await emit(selected_event)
                 await emit({
                     "type": "command_result",
                     "request_id": raw["request_id"],

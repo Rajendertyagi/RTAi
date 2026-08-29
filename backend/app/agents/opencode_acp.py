@@ -6,11 +6,11 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from ..core.protocol import jsonable_model, text_from_acp_update
 from ..logging_config import log_event, short_id
-from .base import AgentAdapter, Emit, SelectionResult
+from .base import AgentAdapter, Emit, SelectionKind, SelectionResult
 from .capabilities import (
     AgentDescriptor,
     CapabilitySection,
@@ -69,6 +69,7 @@ class OpenCodeSession(AgentAdapter):
         self._emit: Emit | None = None
         self._owned: OwnedProcess | None = None
         self._agent_name: str | None = None
+        self._agent_title: str | None = None
         self._agent_version: str | None = None
         self._initialized = False
         self._capabilities = AcpCapabilityState()
@@ -308,7 +309,9 @@ class OpenCodeSession(AgentAdapter):
             )
         else:
             name = self._agent_name or "opencode"
-            agent = AgentDescriptor(id=name.lower(), label=name)
+            # ACP exposes exactly one agent identity (agentInfo). `name` is the
+            # programmatic id; `title` is the display label when provided.
+            agent = AgentDescriptor(id=name.lower(), label=self._agent_title or name)
         if not self._initialized:
             return CapabilitySnapshot(
                 source=f"acp:{(self._agent_name or 'opencode').lower()}",
@@ -319,9 +322,14 @@ class OpenCodeSession(AgentAdapter):
                 commands=_pending_section(),
             )
         caps = self._capabilities
+        # The single agent is the only selectable agent; mark it selected so
+        # selection stays an idempotent no-op rather than an ACP round-trip.
+        if caps.selected_agent is None:
+            caps.selected_agent = agent.id
         return CapabilitySnapshot(
             source=f"acp:{(self._agent_name or 'opencode').lower()}",
             agent=agent,
+            agents=CapabilitySection(items=(agent,)),
             models=caps.models,
             modes=caps.modes,
             thinking_options=caps.thinking,
@@ -351,11 +359,16 @@ class OpenCodeSession(AgentAdapter):
                 reason="agentInfo_missing",
             )
             self._agent_name = "opencode"
+            self._agent_title = None
             self._agent_version = None
             return
         name = getattr(info, "name", None) or "opencode"
+        # ACP Implementation: `name` is for programmatic use, `title` is the
+        # human-readable display name (fall back to `name` when absent).
+        title = getattr(info, "title", None)
         version = getattr(info, "version", None)
         self._agent_name = name
+        self._agent_title = str(title) if title is not None else None
         self._agent_version = str(version) if version is not None else None
         log_event(
             logger,
@@ -385,13 +398,34 @@ class OpenCodeSession(AgentAdapter):
         # Everything else already flowed out as raw debug events.
 
     async def select(
-        self, kind: Literal["model", "mode", "thinking"], value_id: str
+        self, kind: SelectionKind, value_id: str
     ) -> SelectionResult:
         """Apply a selection using runtime-provided config ids only.
 
         The authoritative echo (config_option_update / mode state) replaces
         local views; failures return a correlated non-applied result.
+
+        ``agent`` is special: ACP exposes exactly one agent identity, so
+        selection is an idempotent no-op for the current agent and a clear
+        rejection for anything else. No ACP request is ever made and no
+        arbitrary agent id is recorded.
         """
+        if kind == "agent":
+            current = self._capabilities.selected_agent
+            if current is not None and value_id == current:
+                return SelectionResult(
+                    kind=kind,
+                    applied=True,
+                    message="Agent selection is a no-op: this ACP session exposes exactly one agent.",
+                )
+            return SelectionResult(
+                kind=kind,
+                applied=False,
+                message=(
+                    f"Unknown agent '{value_id}'. This ACP session exposes exactly "
+                    f"one agent: {current or 'unknown'}."
+                ),
+            )
         if not self._connection or not self._session_id:
             return SelectionResult(kind=kind, applied=False, message="ACP session is not ready.")
         caps = self._capabilities

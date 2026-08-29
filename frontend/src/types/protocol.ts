@@ -91,6 +91,7 @@ export interface SessionItem {
 export type ServerEvent =
   | { type: "status"; state: "starting" | "ready" | "disconnected"; cwd?: string }
   | { type: "error"; message: string; code?: string }
+  | { type: "agent_info"; name: string }
   | { type: "agents_available"; agents?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "models_available"; models?: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "agent_selected"; agent_id: string }
