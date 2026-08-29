@@ -61,7 +61,9 @@ export function Dropdown({
     const rect = btnRef.current?.getBoundingClientRect();
     if (rect) {
       const height = Math.min(240, filtered.length * 32 + (showSearch ? 44 : 8));
-      const top = rect.bottom + height > window.innerHeight ? rect.top - height - 4 : rect.bottom + 4;
+      // Always open upward for visual consistency across pickers; fall back to
+      // downward only when the menu would overflow the top of the window.
+      const top = rect.top - height - 4 < 0 ? rect.bottom + 4 : rect.top - height - 4;
       const left = Math.min(rect.left, window.innerWidth - 200);
       setPos({ top, left });
     }
