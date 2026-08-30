@@ -1,0 +1,71 @@
+/* ============================================================
+   RTAI Base Styles
+   Minimal resets, focus indicators, and scrollbar styling.
+   No component-specific rules — those live in Tailwind utilities.
+   ============================================================ */
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    margin: 0;
+    padding: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    text-size-adjust: 100%;
+  }
+
+  /* Accessibility Focus */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  *:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.6 0.02 80 / 0.3) transparent;
+  }
+  [data-theme="dark"] * {
+    scrollbar-color: oklch(0.6 0.02 80 / 0.3) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+    -webkit-appearance: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.32 0.03 50 / 0.4);
+    border-radius: 6px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.32 0.03 50 / 0.6);
+  }
+
+  /* Keyframes (used by components via Tailwind animate-*) */
+  @keyframes busy-pulse {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    @keyframes busy-pulse {
+      0%, 100% { opacity: 0.2; }
+      50% { opacity: 0.2; }
+    }
+  }
+}

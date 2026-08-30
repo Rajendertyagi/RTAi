@@ -1,0 +1,35 @@
+/* ============================================================
+   RTAI Assistant-UI Overrides
+   Only third-party selectors that cannot be expressed on our
+   React elements. No component styling — that belongs in TSX.
+   ============================================================ */
+
+@layer components {
+  /* Bubble styles for assistant-ui MessagePrimitive output */
+  .bubble--assistant pre {
+    margin-block: 0.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--interactive-border);
+    background: var(--surface-background);
+    overflow: hidden;
+  }
+  .bubble--assistant code {
+    font-family: var(--font-mono);
+    font-size: var(--text-code);
+    background: var(--markdown-inline-code-bg);
+    color: var(--markdown-inline-code);
+    padding: 0.125em 0.375em;
+    border-radius: 0.25rem;
+    word-break: break-all;
+  }
+  .bubble--assistant pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: var(--text-code);
+    white-space: pre;
+    overflow-x: auto;
+    display: block;
+    min-width: 100%;
+  }
+}

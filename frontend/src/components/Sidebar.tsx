@@ -41,37 +41,35 @@ export function Sidebar() {
     const value = folder.trim();
     if (value) {
       localStorage.setItem(FOLDER_KEY, value);
-      // Reconnect will be handled by the parent via socket context (Phase 2)
     }
   };
 
   const handleNewSession = () => {
-    // Clear in-memory state (Phase 2 will implement proper reset)
     window.location.reload();
   };
 
   return (
-    <aside className="sidebar">
+    <aside className="w-[260px] bg-sidebar text-sidebar-foreground border-r border-border flex flex-col shrink-0 overflow-hidden">
       {/* Header */}
-      <div className="sidebar-header">
-        <h1 className="sidebar-title">RTAI</h1>
+      <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
+        <h1 className="text-xl font-semibold m-0 p-0">RTAI</h1>
         <button
           type="button"
           onClick={toggleTheme}
-          className="icon-btn"
+          className="flex items-center justify-center w-8 h-8 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover"
           title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
         >
           {theme === "dark" ? (
-            <Sun className="icon" />
+            <Sun className="w-4 h-4" />
           ) : (
-            <Moon className="icon" />
+            <Moon className="w-4 h-4" />
           )}
         </button>
       </div>
 
       {/* Project Folder */}
-      <div className="project-folder">
-        <label htmlFor="projectFolder" className="folder-label">
+      <div className="p-4 border-b border-border shrink-0">
+        <label htmlFor="projectFolder" className="block text-xs font-medium uppercase tracking-widest opacity-70 mb-2">
           Project Folder:
         </label>
         <input
@@ -83,24 +81,24 @@ export function Sidebar() {
             if (e.key === "Enter") handleFolderSubmit();
           }}
           placeholder="Enter project path..."
-          className="folder-input"
+          className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm outline-none transition-colors focus:border-ring placeholder:text-muted-foreground"
         />
       </div>
 
-      {/* Session List — empty for Phase 5 */}
-      <div className="session-list">
-        <div className="session-list-placeholder">
-          <span className="placeholder-text">No sessions</span>
+      {/* Session List */}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex items-center justify-center h-full min-h-[200px]">
+          <span className="text-sm text-muted-foreground text-center">No sessions</span>
         </div>
       </div>
 
       {/* Footer */}
-      <div className="sidebar-footer">
-        <button type="button" className="icon-btn" title="Reconnect" onClick={handleFolderSubmit}>
-          <RefreshCw className="icon" />
+      <div className="flex items-center justify-center gap-2 p-4 border-t border-border shrink-0">
+        <button type="button" className="flex items-center justify-center w-8 h-8 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover" title="Reconnect" onClick={handleFolderSubmit}>
+          <RefreshCw className="w-4 h-4" />
         </button>
-        <button type="button" className="icon-btn" title="New Session" onClick={handleNewSession}>
-          <Plus className="icon" />
+        <button type="button" className="flex items-center justify-center w-8 h-8 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover" title="New Session" onClick={handleNewSession}>
+          <Plus className="w-4 h-4" />
         </button>
       </div>
     </aside>

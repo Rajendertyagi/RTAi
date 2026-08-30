@@ -5,7 +5,7 @@ import { ChatPanel } from "./components/ChatPanel";
 export function App() {
   return (
     <RtaiRuntimeProvider>
-      <div className="app">
+      <div className="h-full w-full flex flex-row">
         <Sidebar />
         <ChatPanel />
       </div>

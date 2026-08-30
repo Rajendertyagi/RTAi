@@ -1,0 +1,12 @@
+/* ============================================================
+   RTAI Chat UI - Main Entry Point
+   Tailwind v4 + semantic theme + justified CSS exceptions only.
+   ============================================================ */
+
+@layer base, components, utilities;
+
+@import "tailwindcss";
+@import "./themes.css";
+@import "./base.css";
+@import "./markdown.css";
+@import "./assistant-ui.css";

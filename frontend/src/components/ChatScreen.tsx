@@ -36,37 +36,34 @@ export function ChatScreen() {
   const agentInfo = useChatStore((s) => s.agentInfo);
 
   return (
-    // `h-full` (not `h-screen`) fills the parent <main>, and we deliberately do
-    // NOT reuse the top-level `.app` row class here ╬ô├ç├╢ that collision was part of
-    // the earlier broken layout.
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="app__header flex h-14 shrink-0 items-center border-b border-[var(--interactive-border)] bg-[var(--surface-background)] px-4">
+      <header className="flex h-14 shrink-0 items-center border-b border-interactive bg-surface-background px-4">
         <div className="flex items-center gap-2">
-          <span className="text-lg font-medium text-[var(--foreground)]">RTAI</span>
+          <span className="text-lg font-medium text-foreground">RTAI</span>
           <span
-            className={`h-2 w-2 rounded-full ${isConnected ? "bg-[var(--status-success)]" : "bg-[var(--status-error)]"}`}
+            className={`h-2 w-2 rounded-full ${isConnected ? "bg-status-success" : "bg-status-error"}`}
             aria-label={isConnected ? "Connected" : "Disconnected"}
           />
         </div>
-        <div className="ml-auto flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
+        <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
           <span>{agentInfo || "Agent"}</span>
         </div>
       </header>
 
       {/* Main chat area */}
-      <div className="app__main flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
           <ThreadPrimitive.Viewport
             ref={scrollRef}
-            className="chat__messages flex-1 min-h-0 overflow-y-auto px-4 py-6"
+            className="flex-1 min-h-0 overflow-y-auto px-4 py-6"
           >
             <AuiIf condition={(s) => s.thread.isEmpty}>
-              <div className="empty-state mx-auto max-w-md text-center">
-                <h1 className="text-2xl font-normal text-[var(--foreground)]">
+              <div className="mx-auto max-w-md text-center">
+                <h1 className="text-2xl font-normal text-foreground">
                   How can I help?
                 </h1>
-                <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+                <p className="mt-2 text-sm text-muted-foreground">
                   Start a conversation with the AI assistant
                 </p>
               </div>
@@ -77,7 +74,7 @@ export function ChatScreen() {
             </ThreadPrimitive.Messages>
 
             <ThreadPrimitive.ViewportFooter
-              className="thread-footer"
+              className="sticky bottom-0 z-5 flex flex-col bg-background"
               data-testid="thread-viewport-footer"
             >
               {/* Persistent status bar */}
