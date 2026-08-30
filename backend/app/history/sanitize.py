@@ -13,7 +13,16 @@ from typing import Any
 
 #: Trusted fields persisted per event type. Anything not listed is dropped.
 _TRUSTED_FIELDS: dict[str, frozenset[str]] = {
-    "user_message": frozenset({"type", "session_id", "turn_id", "message_id", "text"}),
+    "user_message": frozenset(
+        {
+            "type",
+            "session_id",
+            "turn_id",
+            "message_id",
+            "text",
+            "prompt",
+        }
+    ),
     "delta": frozenset({"type", "session_id", "turn_id", "message_id", "sequence", "text"}),
     "part_start": frozenset({"type", "session_id", "turn_id", "part_id", "part_type"}),
     "part_delta": frozenset({"type", "session_id", "turn_id", "part_id", "text"}),
@@ -44,12 +53,32 @@ def sanitize_event_payload(frame: dict[str, Any]) -> dict[str, Any]:
     """Return a sanitized copy of a normalized Protocol v1 frame.
 
     Returns an empty dict for event types that are not persisted.
+    For ``user_message``, attachment metadata (``prompt``) is kept but raw
+    content fields are stripped to prevent accidental persistence of bases,
+    file bytes, or embedded text.
     """
     event_type = str(frame.get("type") or "")
     allowed = _TRUSTED_FIELDS.get(event_type)
     if allowed is None:
         return {}
-    return {key: frame[key] for key in allowed if key in frame}
+    result: dict[str, Any] = {key: frame[key] for key in allowed if key in frame}
+    # Redact raw content from prompt attachment metadata.
+    if event_type == "user_message" and "prompt" in result:
+        safe_prompt = []
+        for block in result["prompt"]:
+            if not isinstance(block, dict):
+                continue
+            safe_block: dict[str, Any] = {
+                "kind": block.get("kind"),
+                "name": block.get("name", ""),
+            }
+            if isinstance(block.get("mime_type"), str):
+                safe_block["mime_type"] = block["mime_type"]
+            if isinstance(block.get("size_bytes"), int):
+                safe_block["size_bytes"] = block["size_bytes"]
+            safe_prompt.append(safe_block)
+        result["prompt"] = safe_prompt
+    return result
 
 
 def build_event_key(

@@ -25,7 +25,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from ..agents.base import AgentAdapter
-from ..agents.capabilities import SessionCapabilities
+from ..agents.capabilities import AttachmentCapabilities, SessionCapabilities
 from ..core.protocol import resolve_project_path
 from ..history.models import HistoryEvent, HistorySession, SessionStatus
 from ..history.sanitize import (
@@ -480,7 +480,8 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 session_id: str = raw["session_id"]
                 turn_id: str = raw["turn_id"]
                 msg_id: str = raw["message_id"]
-                text: str = raw["text"]
+                text: str | None = raw.get("text")
+                prompt_blocks_raw: list[Any] | None = raw.get("prompt")
                 turn_ctx.update(
                     session_id=session_id,
                     turn_id=turn_id,
@@ -496,11 +497,13 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     turn=short_id(turn_id),
                     message=short_id(msg_id),
                     request=short_id(raw.get("request_id")),
-                    text_length=len(text),
+                    text_length=len(text) if text else None,
+                    block_count=len(prompt_blocks_raw) if prompt_blocks_raw else None,
                 )
 
                 async def _turn(
-                    _text: str = text,
+                    _text: str | None = text,
+                    _prompt_blocks_raw: list[Any] | None = prompt_blocks_raw,
                     _session_id: str = session_id,
                     _turn_id: str = turn_id,
                 ) -> None:
@@ -512,7 +515,72 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                             session=short_id(_session_id),
                             turn=short_id(_turn_id),
                         )
-                        await adapter.submit_prompt(_text)
+                        if _prompt_blocks_raw is not None:
+                            # Multi-block path with attachment support.
+                            from ..agents.acp.prompt_content import (
+                                make_prompt_content,
+                                validate_prompt_limits,
+                            )
+
+                            snap = adapter.capability_snapshot()
+                            ac = snap.attachments
+                            if isinstance(ac, AttachmentCapabilities):
+                                if ac.block_types:
+                                    # Validate and convert blocks.
+                                    blocks = [
+                                        make_prompt_content(dict(b)) for b in _prompt_blocks_raw
+                                    ]
+                                    validate_prompt_limits(
+                                        blocks,
+                                        max_item_bytes=ac.max_item_bytes,
+                                        max_total_bytes=ac.max_total_bytes,
+                                        max_count=ac.max_count,
+                                    )
+                                    # Check each block against negotiated capabilities.
+                                    kind_map = {
+                                        "image": "images",
+                                        "audio": "audio",
+                                        "embedded_text": "embedded_resources",
+                                        "embedded_blob": "embedded_resources",
+                                    }
+                                    for b in blocks:
+                                        attr = kind_map.get(b.kind.value)
+                                        if attr and attr in vars(ac) and not getattr(ac, attr):
+                                            raise RuntimeError(
+                                                f"attachment rejected: {b.kind.value} "
+                                                f"not supported by this agent"
+                                            )
+                                    await adapter.submit_prompt_content(blocks)
+                                else:
+                                    # Provider advertises no attachment types — fall back
+                                    # to text-only if the only block is text.
+                                    if (
+                                        len(_prompt_blocks_raw) == 1
+                                        and _prompt_blocks_raw[0].get("kind") == "text"
+                                    ):
+                                        await adapter.submit_prompt(
+                                            _prompt_blocks_raw[0].get("text", "") or ""
+                                        )
+                                    else:
+                                        raise RuntimeError(
+                                            "attachments not supported by this agent"
+                                        )
+                            else:
+                                # Attachments unavailable — only text prompts allowed.
+                                if (
+                                    len(_prompt_blocks_raw) == 1
+                                    and _prompt_blocks_raw[0].get("kind") == "text"
+                                ):
+                                    await adapter.submit_prompt(
+                                        _prompt_blocks_raw[0].get("text", "") or ""
+                                    )
+                                else:
+                                    raise RuntimeError("attachments not available for this agent")
+                        else:
+                            # Legacy text-only path.
+                            if not _text:
+                                raise RuntimeError("text is required when prompt is not provided")
+                            await adapter.submit_prompt(_text)
                         # Task completes when submit_prompt returns: all deltas sent,
                         # done emitted, prompt() awaited. No sleep needed.
                     except asyncio.CancelledError:
@@ -554,15 +622,30 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 # Emit user_message so the UI binds the response window. This
                 # is the single persistence point for the user's message — it
                 # travels through the trusted emit() boundary exactly once.
-                await emit(
-                    {
-                        "type": "user_message",
-                        "session_id": session_id,
-                        "turn_id": turn_id,
-                        "message_id": msg_id,
-                        "text": text,
-                    }
-                )
+                user_msg: dict[str, Any] = {
+                    "type": "user_message",
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": msg_id,
+                }
+                if text is not None:
+                    user_msg["text"] = text
+                if prompt_blocks_raw is not None:
+                    # Include safe attachment metadata (no raw content).
+                    user_msg["prompt"] = [
+                        {
+                            "kind": b.get("kind"),
+                            "name": b.get("name", ""),
+                            "mime_type": b.get("mime_type"),
+                            "size_bytes": (
+                                len(b.get("data_base64", ""))
+                                if b.get("data_base64")
+                                else (len(b.get("text", "")) if b.get("text") else None)
+                            ),
+                        }
+                        for b in prompt_blocks_raw
+                    ]
+                await emit(user_msg)
                 await emit(
                     {
                         "type": "command_result",

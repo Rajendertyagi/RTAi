@@ -87,6 +87,46 @@ a dialog built from the request's options and forwards the user's choice as a
 `permission_response`; the adapter resolves the pending request with that
 option.
 
+## Prompt content boundary
+
+RTAI uses a **provider-neutral prompt content model** at the adapter
+boundary. The frontend sends either a plain `text` string or an ordered
+`prompt` array of content blocks (text, image, audio, resource links,
+embedded resources). The shared ACP adapter (`agents/acp/session.py`)
+validates each block against the negotiated ACP `promptCapabilities` and
+converts to official SDK `ContentBlock` objects before dispatch.
+
+```
+WebSocket prompt command
+        ↓
+Protocol v1 validation (protocol_v1.py)
+        ↓
+RTAI PromptContent domain model (acp/prompt_content.py)
+        ↓
+Capability check + safety limits (5 MiB/item, 10 MiB total, 10 blocks)
+        ↓
+ACP SDK ContentBlock[] conversion
+        ↓
+agent.prompt(session_id, prompt=[...])
+```
+
+Key design decisions:
+
+* **Resource links are ACP v1 baseline** — always supported unless the
+  provider explicitly disables them.
+* **Image/audio/embedded resources are capability-gated** — negotiated from
+  `InitializeResponse.agent_capabilities.prompt_capabilities`.
+* **RTAI owns its safety limits** — they are enforced regardless of what
+  the provider advertises. No environment variable can force provider
+  support that was not negotiated.
+* **History is redacted** — persisted prompt metadata includes kind, name,
+  MIME type, and byte size only; raw base64, embedded text, and file bytes
+  are never stored.
+* **The OpenCode HTTP/server adapter does not yet support attachments.**
+  It reports `attachments_available.available = false` with reason
+  `not_exposed_by_provider` because its REST API has no documented
+  attachment schema. This is intentionally deferred to a separate task.
+
 ## Why React/Vite
 
 The frontend is a React + Vite + TypeScript single-page app (Tailwind for

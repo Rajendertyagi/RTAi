@@ -31,6 +31,7 @@ from ...logging_config import log_event, short_id
 from ..base import AgentAdapter, Emit, SelectionKind, SelectionResult
 from ..capabilities import (
     AgentDescriptor,
+    AttachmentCapabilities,
     CapabilitySection,
     CapabilitySnapshot,
     SessionCapabilities,
@@ -46,6 +47,7 @@ from .mapping import (
     map_tool_locations,
     map_tool_status,
 )
+from .prompt_content import PromptContent, PromptKind, validate_prompt_limits
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +81,7 @@ class AcpSession(AgentAdapter):
         Subclasses must override this. Raising RuntimeError with an actionable
         message is the expected way to report a missing binary.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement resolve_executable()."
-        )
+        raise NotImplementedError(f"{type(self).__name__} must implement resolve_executable().")
 
     # --- Lifecycle ------------------------------------------------------
     def __init__(self) -> None:
@@ -114,9 +114,7 @@ class AcpSession(AgentAdapter):
         try:
             from acp import PROTOCOL_VERSION, spawn_agent_process
         except ImportError as exc:
-            raise RuntimeError(
-                "ACP SDK is missing. Run: pip install -r requirements.txt"
-            ) from exc
+            raise RuntimeError("ACP SDK is missing. Run: pip install -r requirements.txt") from exc
 
         executable = self.resolve_executable()
 
@@ -155,10 +153,9 @@ class AcpSession(AgentAdapter):
             pid=self._owned.pid,
         )
         try:
-            init_response = await self._connection.initialize(
-                protocol_version=PROTOCOL_VERSION
-            )
+            init_response = await self._connection.initialize(protocol_version=PROTOCOL_VERSION)
             self._capture_agent_identity(init_response)
+            self._capabilities.ingest_prompt_capabilities(jsonable_model(init_response))
             session = await self._connection.new_session(cwd=str(cwd), mcp_servers=[])
             self._session_id = session.session_id
             self._initialized = True
@@ -207,6 +204,126 @@ class AcpSession(AgentAdapter):
             session=short_id(self._session_id),
         )
         # The turn is over, so whatever part was streaming is finished too.
+        await self._close_open_part()
+        await self._send({"type": "done"})
+
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+        """Send a multi-block prompt with validated attachments.
+
+        Converts RTAI domain blocks to ACP SDK ContentBlock objects, checks
+        each block against the negotiated agent capabilities, and dispatches
+        a single prompt call. Rejects the entire prompt if any block is
+        unsupported — no partial submission.
+        """
+        if not self._connection or not self._session_id:
+            raise RuntimeError("ACP session is not ready")
+        if not content:
+            raise ValueError("prompt content must not be empty")
+
+        caps = self._capabilities
+        # Validate RTAI safety limits before any SDK interaction.
+        validate_prompt_limits(content)
+
+        # Check capability support for each block kind — reject entirely on
+        # first unsupported kind rather than silently dropping or downgrading.
+        for block in content:
+            if block.kind == PromptKind.TEXT:
+                continue
+            if block.kind == PromptKind.IMAGE and not caps.attachment_images:
+                raise RuntimeError("attachment rejected: image not supported by this agent")
+            if block.kind == PromptKind.AUDIO and not caps.attachment_audio:
+                raise RuntimeError("attachment rejected: audio not supported by this agent")
+            if (
+                block.kind in (PromptKind.EMBEDDED_TEXT, PromptKind.EMBEDDED_BLOB)
+                and not caps.attachment_embedded
+            ):
+                raise RuntimeError(
+                    "attachment rejected: embedded resources not supported by this agent"
+                )
+            # RESOURCE_LINK is baseline per ACP v1 and always supported.
+
+        # Convert to ACP SDK ContentBlock objects.
+        from acp import (
+            audio_block,
+            embedded_blob_resource,
+            embedded_text_resource,
+            image_block,
+            resource_link_block,
+            text_block,
+        )
+        from acp.schema import EmbeddedResourceContentBlock
+
+        blocks: list[Any] = []
+        for block in content:
+            if block.kind == PromptKind.TEXT:
+                blocks.append(text_block(block.text or ""))
+            elif block.kind == PromptKind.IMAGE:
+                assert block.data is not None
+                blocks.append(
+                    image_block(
+                        block.data.decode("latin-1"),  # binary-safe round-trip
+                        block.mime_type or "",
+                    )
+                )
+            elif block.kind == PromptKind.AUDIO:
+                assert block.data is not None
+                blocks.append(
+                    audio_block(
+                        block.data.decode("latin-1"),
+                        block.mime_type or "",
+                    )
+                )
+            elif block.kind == PromptKind.RESOURCE_LINK:
+                blocks.append(
+                    resource_link_block(
+                        block.name,
+                        block.uri or "",
+                        mime_type=block.mime_type,
+                    )
+                )
+            elif block.kind == PromptKind.EMBEDDED_TEXT:
+                blocks.append(
+                    EmbeddedResourceContentBlock(
+                        type="resource",
+                        resource=embedded_text_resource(
+                            f"rtai://{block.name}",
+                            block.text or "",
+                            mime_type=block.mime_type,
+                        ),
+                    )
+                )
+            elif block.kind == PromptKind.EMBEDDED_BLOB:
+                assert block.data is not None
+                blocks.append(
+                    EmbeddedResourceContentBlock(
+                        type="resource",
+                        resource=embedded_blob_resource(
+                            f"rtai://{block.name}",
+                            block.data.decode("latin-1"),
+                            mime_type=block.mime_type,
+                        ),
+                    )
+                )
+
+        log_event(
+            logger,
+            logging.DEBUG,
+            "acp_prompt_content_submitted",
+            session=short_id(self._session_id),
+            block_count=len(blocks),
+            kinds=[b.kind.value for b in content],
+            total_bytes=sum(b.size_bytes for b in content),
+        )
+        await self._connection.prompt(
+            session_id=self._session_id,
+            prompt=blocks,  # type: ignore[arg-type]
+        )
+        log_event(
+            logger,
+            logging.DEBUG,
+            "acp_turn_completed",
+            session=short_id(self._session_id),
+        )
         await self._close_open_part()
         await self._send({"type": "done"})
 
@@ -308,6 +425,31 @@ class AcpSession(AgentAdapter):
         )
         if caps.selected_mode is not None:
             caps.selected_agent = caps.selected_mode
+        # Attachment capabilities derived from ACP Initialize negotiation.
+        # Resource links are baseline per ACP v1 spec; image/audio/embedded
+        # are gated by agent promptCapabilities. RTAI safety limits are
+        # reported alongside provider limits so the UI can enforce its own.
+        ac = AttachmentCapabilities(
+            block_types=tuple(
+                k.value
+                for k, flag in [
+                    (PromptKind.RESOURCE_LINK, caps.attachment_resource_links),
+                    (PromptKind.IMAGE, caps.attachment_images),
+                    (PromptKind.AUDIO, caps.attachment_audio),
+                    (PromptKind.EMBEDDED_TEXT, caps.attachment_embedded),
+                    (PromptKind.EMBEDDED_BLOB, caps.attachment_embedded),
+                ]
+                if flag
+            ),
+            max_size_bytes=None,  # provider does not advertise size limits
+            resource_links=caps.attachment_resource_links,
+            images=caps.attachment_images,
+            audio=caps.attachment_audio,
+            embedded_resources=caps.attachment_embedded,
+            max_item_bytes=5 * 1024 * 1024,
+            max_total_bytes=10 * 1024 * 1024,
+            max_count=10,
+        )
         return CapabilitySnapshot(
             source=f"acp:{(self._agent_name or fallback).lower()}",
             agent=agent,
@@ -316,10 +458,7 @@ class AcpSession(AgentAdapter):
             modes=caps.modes,
             thinking_options=caps.thinking,
             commands=caps.commands,
-            attachments=UnavailableCapability(
-                UnavailabilityReason.PENDING_DISCOVERY,
-                "Attachment support is negotiated during initialization.",
-            ),
+            attachments=ac,
             sessions=(
                 self._session_caps
                 if self._session_caps is not None
@@ -355,9 +494,7 @@ class AcpSession(AgentAdapter):
             resume=_capability_present(session_caps, "resume"),
             close=_capability_present(session_caps, "close"),
             delete=_capability_present(session_caps, "delete"),
-            additional_directories=_capability_present(
-                session_caps, "additional_directories"
-            ),
+            additional_directories=_capability_present(session_caps, "additional_directories"),
         )
 
     def _capture_agent_identity(self, init_response: Any) -> None:
@@ -447,9 +584,7 @@ class AcpSession(AgentAdapter):
         text = text_from_acp_chunk(update)
         if not text:
             return
-        await self._send(
-            {"type": "part_delta", "part_id": self._open_part_id, "text": text}
-        )
+        await self._send({"type": "part_delta", "part_id": self._open_part_id, "text": text})
         # Legacy path: the UI still renders one concatenated text blob until
         # the frontend moves to parts. Only the reply belongs in it - thinking
         # was never part of it before, so it stays out.
@@ -473,8 +608,7 @@ class AcpSession(AgentAdapter):
         # carries a toolCallId plus at least one recognisable tool field.
         is_named_tool_update = session_update in ("tool_call", "tool_call_update")
         has_tool_marker = "toolCallId" in dumped and any(
-            key in dumped
-            for key in ("kind", "status", "title", "content", "locations", "rawInput")
+            key in dumped for key in ("kind", "status", "title", "content", "locations", "rawInput")
         )
         if not is_named_tool_update and not has_tool_marker:
             return
@@ -527,9 +661,7 @@ class AcpSession(AgentAdapter):
             event["locations"] = locations
         await self._send(event)
 
-    async def select(
-        self, kind: SelectionKind, value_id: str
-    ) -> SelectionResult:
+    async def select(self, kind: SelectionKind, value_id: str) -> SelectionResult:
         """Apply a selection using runtime-provided config ids only.
 
         The authoritative echo (config_option_update / mode state) replaces
@@ -557,12 +689,17 @@ class AcpSession(AgentAdapter):
                     session_id=self._session_id, mode_id=value_id
                 )
                 caps.apply_selection_locally(kind, value_id)
-                return SelectionResult(kind=kind, applied=True,
-                                       message="Legacy set_session_mode accepted.")
-            config_id = {
-                "model": caps.model_config_id,
-                "thinking": caps.thought_level_config_id,
-            }.get(kind) if kind != "mode" else caps.mode_config_id
+                return SelectionResult(
+                    kind=kind, applied=True, message="Legacy set_session_mode accepted."
+                )
+            config_id = (
+                {
+                    "model": caps.model_config_id,
+                    "thinking": caps.thought_level_config_id,
+                }.get(kind)
+                if kind != "mode"
+                else caps.mode_config_id
+            )
             if not config_id:
                 return SelectionResult(
                     kind=kind,
@@ -582,9 +719,7 @@ class AcpSession(AgentAdapter):
                 kind=kind, applied=True, message="Runtime accepted the selection."
             )
         except Exception as exc:
-            return SelectionResult(
-                kind=kind, applied=False, message=f"Selection failed: {exc}"
-            )
+            return SelectionResult(kind=kind, applied=False, message=f"Selection failed: {exc}")
 
     async def _send(self, event: dict[str, Any]) -> None:
         if self._emit:

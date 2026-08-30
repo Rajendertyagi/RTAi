@@ -499,10 +499,81 @@ authoritative.
 }
 ```
 
-Attachment references carry metadata only: `id`, `name`, `mime_type`,
-`size_bytes`, optional `kind`. Local filesystem paths, binary data and object
-URLs are forbidden anywhere in protocol events. Phase 1 attachments are
-mock/local-only; real upload transport is future work.
+### prompt — text-only or multi-block
+
+The `prompt` command accepts **either** a plain `text` string (legacy path)
+**or** an ordered `prompt` array of content blocks. Both must not be present
+simultaneously. When `prompt` is used, the `text` field is omitted.
+
+```json
+{
+  "protocol_version": 1,
+  "request_id": "req-42",
+  "type": "prompt",
+  "session_id": "session-3",
+  "turn_id": "turn-8",
+  "message_id": "msg-15",
+  "prompt": [
+    {"kind": "text",      "name": "message", "text": "Summarize this"},
+    {"kind": "image",     "name": "diagram.png",
+     "mime_type": "image/png", "data_base64": "..."},
+    {"kind": "resource_link", "name": "report.pdf",
+     "uri": "file:///project/report.pdf",
+     "mime_type": "application/pdf"}
+  ]
+}
+```
+
+#### Block kinds
+
+| `kind` | Required fields | Description |
+|---|---|---|
+| `text` | `name`, `text` | Plain text (always supported) |
+| `image` | `name`, `mime_type`, `data_base64` | Base64-encoded image |
+| `audio` | `name`, `mime_type`, `data_base64` | Base64-encoded audio |
+| `resource_link` | `name`, `uri` | URI reference to external resource |
+| `embedded_text` | `name`, `mime_type`, `text` | Inline text resource |
+| `embedded_blob` | `name`, `mime_type`, `data_base64` | Inline binary resource |
+
+#### Capability gating
+
+Image, audio, and embedded resources are **not** guaranteed available. The
+UI must check the `attachments_available` event emitted at connection time:
+
+```json
+{"type": "attachments_available", "available": true,
+ "block_types": ["resource_link", "image"],
+ "max_item_bytes": 5242880, "max_total_bytes": 10485760, "max_count": 10}
+```
+
+Blocks whose kind is not in `block_types` must not be sent. Text-only prompts
+remain valid even when `attachments_available.available` is `false`.
+
+#### Safety limits
+
+RTAI enforces its own limits independently of the provider:
+
+| Limit | Default | Config |
+|---|---|---|
+| Max bytes per attachment | 5 MiB | `RTAI_ATTACHMENT_MAX_ITEM_BYTES` |
+| Max total bytes per prompt | 10 MiB | `RTAI_ATTACHMENT_MAX_TOTAL_BYTES` |
+| Max block count per prompt | 10 | `RTAI_ATTACHMENT_MAX_COUNT` |
+
+Violations return a normalized `command_result` with `success: false`.
+
+#### Validation rules
+
+- Unknown `kind` values are rejected.
+- Mutually exclusive fields are enforced (e.g. `image` cannot have `text`).
+- Base64 is strictly decoded; invalid encoding returns a client error.
+- `file:` URIs must resolve inside the project root.
+- `https:` URIs are allowed for remote resources.
+- Credentials in URIs are rejected.
+- Filename path traversal (`..`, `/`, `\`) is rejected.
+- MIME types are treated as untrusted metadata; only `image/*` and `audio/*`
+  prefixes are accepted for inline blocks.
+- Raw attachment content is never persisted in history — only kind, name,
+  MIME type, and decoded byte size are stored.
 
 Cancel identifies the exact session and turn; cancelling a non-active turn
 yields a successful no-op acknowledgement.

@@ -38,7 +38,9 @@ def _unavailable(reason: UnavailabilityReason, message: str) -> UnavailableCapab
     return UnavailableCapability(reason=reason, message=message)
 
 
-def _select_option(config_option: dict[str, Any]) -> tuple[
+def _select_option(
+    config_option: dict[str, Any],
+) -> tuple[
     list[ModelDescriptor] | None,
     list[ThinkingOption] | None,
     list[ModeDescriptor] | None,
@@ -108,6 +110,11 @@ class AcpCapabilityState:
         self.model_config_id: str | None = None
         self.mode_config_id: str | None = None
         self.thought_level_config_id: str | None = None
+        # Attachment capabilities mapped from ACP InitializeResponse.
+        self.attachment_resource_links: bool = True  # baseline per ACP v1
+        self.attachment_images: bool = False
+        self.attachment_audio: bool = False
+        self.attachment_embedded: bool = False
 
     # -- ingest ------------------------------------------------------------
 
@@ -126,6 +133,27 @@ class AcpCapabilityState:
         if isinstance(legacy, dict) and not self._mode_section_available():
             self._ingest_legacy_modes(legacy)
 
+    def ingest_prompt_capabilities(self, init_response: Any) -> None:
+        """Map ACP InitializeResponse.agent_capabilities into attachment flags.
+
+        Called after the initialize handshake so the session can check
+        capabilities before dispatching prompts with attachments.
+        """
+        if not isinstance(init_response, dict):
+            return
+        caps = init_response.get("agentCapabilities")
+        if not isinstance(caps, dict):
+            return
+        pc = caps.get("promptCapabilities")
+        if not isinstance(pc, dict):
+            return
+        self.attachment_images = bool(pc.get("image"))
+        self.attachment_audio = bool(pc.get("audio"))
+        self.attachment_embedded = bool(pc.get("embeddedContext") or pc.get("embedded_context"))
+        # resource_links are baseline per ACP v1 — always True unless
+        # the provider explicitly disables them (which compliant agents won't).
+        self.attachment_resource_links = True
+
     def ingest_config_options(self, options: list[Any]) -> None:
         """Replace affected sections from a complete config-options payload.
 
@@ -143,23 +171,17 @@ class AcpCapabilityState:
             new_models, new_thinking, new_modes, current = _select_option(option)
             if new_models is not None:
                 models = new_models
-                self.model_config_id = (
-                    option_id if isinstance(option_id, str) else None
-                )
+                self.model_config_id = option_id if isinstance(option_id, str) else None
                 if current is not None:
                     self.selected_model = current
             elif new_thinking is not None:
                 thinking = new_thinking
-                self.thought_level_config_id = (
-                    option_id if isinstance(option_id, str) else None
-                )
+                self.thought_level_config_id = option_id if isinstance(option_id, str) else None
                 if current is not None:
                     self.selected_thinking = current
             elif new_modes is not None:
                 modes = new_modes
-                self.mode_config_id = (
-                    option_id if isinstance(option_id, str) else None
-                )
+                self.mode_config_id = option_id if isinstance(option_id, str) else None
                 if current is not None:
                     self.selected_mode = current
             # Unknown categories are ignored safely.

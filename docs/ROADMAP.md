@@ -61,6 +61,13 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 | WebSocket contract tests + mock-agent tests | complete |
 | Structured backend logging (privacy-safe event chain, `RTAI_LOG_LEVEL`) | complete |
 | services/ session orchestration extracted from route handler | planned |
+| Provider-neutral prompt content model (`acp/prompt_content.py`) | complete |
+| ACP attachment negotiation from InitializeResponse promptCapabilities | complete |
+| Protocol v1 `attachments_available` capability event | complete |
+| Multi-block prompt dispatch via `submit_prompt_content` | complete |
+| RTAI safety limits (5 MiB/item, 10 MiB total, 10 blocks) | complete |
+| History redaction for attachment metadata | complete |
+| OpenCode HTTP/server adapter attachment support | deferred — separate task |
 
 ## Phase 3 — Models, modes and diagnostics
 | Feature | Status |
