@@ -162,8 +162,6 @@ def server_url():
                             break
                         await self._emit({"type": "delta", "text": chunk})
                         await asyncio.sleep(0.04)
-                except asyncio.CancelledError:
-                    raise
                 if not self._cancelled:
                     await self._emit({"type": "done", "reason": "completed"})
 
