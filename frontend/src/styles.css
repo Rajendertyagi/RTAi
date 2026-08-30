@@ -5,6 +5,9 @@
 
 @layer base, components, utilities;
 
+/* Tailwind v4 entry point. Without this import the utility classes used across
+   the components emit NO CSS, which is why the UI looked unstyled. */
+@import "tailwindcss";
 /* === BASE: RESET, TOKENS, A11Y === */
 @layer base {
   *, *::before, *::after {
