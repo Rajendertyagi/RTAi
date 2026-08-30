@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#151313" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fdfcfa" media="(prefers-color-scheme: light)" />
+    <title>RTAI Chat</title>
+    <script>
+      // Pre-paint: sets theme before React renders so colors are correct on first paint.
+      // Must be synchronous, inline, and before the React script.
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme");
+          var isDark = stored === "dark" || (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.dataset.theme = isDark ? "dark" : "light";
+          root.style.colorScheme = isDark ? "dark" : "light";
+        } catch (e) {
+          /* Storage unavailable; CSS defaults to light. */
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-CTdefib6.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CtcgT5RV.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
