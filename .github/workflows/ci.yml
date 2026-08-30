@@ -6,6 +6,7 @@ on:
       - main
       - "feature/**"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -83,14 +84,6 @@ jobs:
         with:
           name: frontend-dist
           path: backend/app/static/dist/
-          if-no-files-found: warn
-
-      - name: Upload lockfile artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-lock-json
-          path: frontend/package-lock.json
           if-no-files-found: warn
 
   integration:
@@ -216,6 +209,15 @@ jobs:
           }
           Write-Host "Frontend build present at backend/app/static/dist/"
 
+      - name: Stage backend source alongside built frontend
+        shell: pwsh
+        run: |
+          $pkg = "$env:RUNNER_TEMP\rtai-web-package"
+          New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+          # Copy backend source (preserves directory structure under backend/)
+          Copy-Item -Path "backend" -Destination $pkg -Recurse -Force
+          Write-Host "Staged $(Get-ChildItem -Path $pkg -Recurse -File | Measure-Object).files into $pkg"
+
       - name: Install backend dependencies
         working-directory: backend
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
@@ -225,6 +227,13 @@ jobs:
         run: |
           $env:OPENCODE_BIN = ""
           python -m unittest discover -s tests/backend -t . -v -p test_packaging_smoke.py
+
+      - name: Upload combined runnable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtai-web-package
+          path: ${{ runner.temp }}/rtai-web-package/
+          if-no-files-found: error
 
   playwright-deterministic:
     runs-on: windows-latest
