@@ -10,6 +10,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Generated Vite build output — CI builds it; never committed.
+backend/app/static/dist/
+
 .env
 .env.local
 

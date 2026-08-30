@@ -7,9 +7,8 @@ above it.
 
 ```mermaid
 graph TD
-    UI[Frontend: Loquix/Lit components] --> T[Transport interface]
+    UI[Frontend: React/Vite] --> T[Transport hook]
     T --> WS[WebSocketTransport]
-    T --> M[MockTransport]
     T -.future.-> TAURI[TauriIpcTransport]
     WS -->|normalized JSON events| API[Backend api/ routes]
     API --> S[services/: session orchestration]
@@ -40,7 +39,7 @@ backend/app/
 ├── agents/    base.py contract + one folder-member per backend (opencode_acp.py)
 ├── core/      protocol helpers shared across layers
 ├── services/  session orchestration (introduced in Phase 2)
-└── main.py    FastAPI factory, static mount for legacy POC UI
+└── main.py    FastAPI factory, static mount for the built React frontend
 ```
 
 ## Lifecycles
@@ -82,16 +81,19 @@ sequenceDiagram
 
 ### Permission lifecycle
 
-Agent requests permission → adapter emits `permission_request` → **current POC
-always returns "cancelled"** (safety). Phase 4 adds a UI dialog that forwards a
-real `permission_response`.
+Agent requests permission → adapter emits `permission_request` → the UI shows
+a dialog built from the request's options and forwards the user's choice as a
+`permission_response`; the adapter resolves the pending request with that
+option.
 
-## Why Loquix
+## Why React/Vite
 
-Framework-agnostic Web Components (Lit) with granular chat components
-(message list, composer, tool roles, stop controls). Works in plain browser,
-Tauri webview, or any host framework without adapters — matching the three
-deployment targets. See ADR-0001.
+The frontend is a React + Vite + TypeScript single-page app (Tailwind for
+styling, assistant-ui primitives for the chat runtime). It talks to the backend
+only through the normalized WebSocket protocol; the transport is isolated in
+`frontend/src/hooks/useRtaiSocket.ts` so the UI never touches WebSocket
+globals directly. The built output is produced by GitHub Actions and served
+from `backend/app/static/dist/`.
 
 ## Why normalized agent events
 

@@ -10,7 +10,7 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 | Normalized event protocol documented | complete |
 | Transport interface + Mock/WebSocket implementations (frontend) | complete |
 | Tooling: ruff/mypy/vitest/eslint/prettier/vite | complete |
-| Legacy Deep Chat POC preserved and marked temporary | complete |
+| Legacy Deep Chat POC removed (React/Vite frontend is the only UI) | complete |
 
 ## Phase 1 — Loquix UI with mock transport
 | Feature | Status |
@@ -28,6 +28,10 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 > Permanent constraint recorded in Phase 0 docs: OpenCode process ownership —
 > only the app-spawned child may be managed; see docs/adr/0006 and AGENTS.md.
 > Verified green: CI run 32892049869 (branch feature/loquix-mock-ui).
+>
+> Superseded: the Phase 1 Loquix UI and its mock transport were replaced by the
+> React/Vite frontend (Tailwind, modularized chat UI) speaking Protocol v1 over
+> the real WebSocket. The legacy Deep Chat POC was removed.
 
 ## Phase 2 — Real ACP streaming
 
