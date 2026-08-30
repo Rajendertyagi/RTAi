@@ -61,7 +61,7 @@ export function ChatScreen() {
             <AuiIf condition={(s) => s.thread.isEmpty}>
               <div className="mx-auto max-w-md text-center">
                 <h1 className="text-2xl font-normal text-foreground">
-                  How can I help?
+                  What are we working on?
                 </h1>
                 <p className="mt-2 text-sm text-muted-foreground">
                   Start a conversation with the AI assistant
