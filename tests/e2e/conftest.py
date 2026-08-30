@@ -156,12 +156,11 @@ def server_url():
                         current = (current + " " + word) if current else word
                 if current:
                     chunks.append(current)
-                try:
-                    for chunk in chunks:
-                        if self._cancelled:
-                            break
-                        await self._emit({"type": "delta", "text": chunk})
-                        await asyncio.sleep(0.04)
+                for chunk in chunks:
+                    if self._cancelled:
+                        break
+                    await self._emit({"type": "delta", "text": chunk})
+                    await asyncio.sleep(0.04)
                 if not self._cancelled:
                     await self._emit({"type": "done", "reason": "completed"})
 
