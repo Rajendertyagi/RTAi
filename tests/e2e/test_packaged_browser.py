@@ -47,7 +47,7 @@ def test_page_loads_with_rtai_heading(page, server_url: str) -> None:
     assert "RTAI" in page.title()
 
     # The empty state heading should be "How can I help?".
-    heading = page.locator("h1").first
+    heading = page.locator(".empty-state h1").first
     heading.wait_for(state="visible", timeout=5000)
     heading_text = heading.inner_text()
     assert "How can I help?" in heading_text
