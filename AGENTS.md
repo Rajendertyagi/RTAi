@@ -44,6 +44,21 @@ Instructions for coding agents working in this repository.
 - **Preserve unrelated user changes** — do not revert, reformat, or "clean up"
   files you were not asked to touch.
 
+## Frontend styling
+
+See [`docs/STYLING.md`](docs/STYLING.md) for the full convention.
+
+* Tailwind CSS v4 utilities style React components.
+* Semantic theme values are centralized and exposed through `@theme inline`.
+* Components use semantic utilities instead of raw palette colors.
+* Do not add global component CSS selectors.
+* Do not use `@apply`.
+* Do not introduce CSS Modules, CSS-in-JS or another styling framework.
+* Arbitrary values are limited to genuine one-off structural calculations.
+* Markdown, Shiki-generated output and unavoidable third-party DOM are the only normal CSS exceptions.
+* New themes change token values rather than individual components.
+* Coding and browser-testing work remain separate.
+
 ## Mandatory test organization
 
 All tests live in the repository-level `tests/` tree:
