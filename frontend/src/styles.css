@@ -3,6 +3,10 @@
    Single-file production stylesheet
    ============================================================ */
 
+/* Tailwind v4 entry point. Without this import the utility classes used across
+   the components emit NO CSS, which is why the UI looked unstyled. */
+@import "tailwindcss";
+
 @layer base, components, utilities;
 
 /* === BASE: RESET, TOKENS, A11Y === */
