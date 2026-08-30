@@ -455,9 +455,10 @@
   }
   .bubble--assistant {
     width: 100%;
-    background: transparent;
-    border: none;
-    padding: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 0.625rem 0.875rem;
   }
   .bubble--assistant pre {
     margin-block: 0.5rem;
@@ -492,6 +493,7 @@
     padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
     flex-shrink: 0;
     background: var(--background);
+    padding-inline: 1rem;
   }
   .composer-card:focus-within {
     border-color: var(--interactive-border-focus);
@@ -775,9 +777,10 @@
   .composer__input:focus { border-color: var(--interactive-border-focus); }
   .composer__input::placeholder { color: var(--surface-muted-foreground); }
   .composer__submit {
-    width: 2rem; height: 2rem; border-radius: 0.5rem; background: var(--primary);
-    color: var(--primary-foreground); border: none; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; transition: opacity var(--transition-fast); flex-shrink: 0;
+    width: 2rem; height: 2rem; min-width: 2.25rem; min-height: 2.25rem;
+    border-radius: 0.5rem; background: var(--primary); color: var(--primary-foreground);
+    border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: opacity var(--transition-fast); flex-shrink: 0;
   }
   .composer__submit:disabled { opacity: 0.4; cursor: not-allowed; }
   .composer__submit:not(:disabled):hover { opacity: 0.85; }

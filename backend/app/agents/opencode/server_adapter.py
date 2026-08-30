@@ -596,7 +596,7 @@ class OpenCodeServerAdapter(AgentAdapter):
 
         self._capabilities.apply_selection_locally(resolved, value_id)
         return SelectionResult(
-            kind=resolved,
+            kind=resolved,  # type: ignore[arg-type]
             applied=True,
             message=(
                 "Applied to the next prompt "
