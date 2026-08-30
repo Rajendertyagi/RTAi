@@ -188,7 +188,7 @@ export function CapabilityControls() {
       );
     }
     if (agents.length === 1) {
-      const a = agents[0];
+      const a = agents[0]!;
       return (
         <CapabilityChip
           key="agent"
