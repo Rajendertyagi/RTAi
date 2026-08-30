@@ -85,6 +85,9 @@ jobs:
           name: frontend-dist
           path: backend/app/static/dist/
           if-no-files-found: warn
+          # Intermediate artifact consumed within the same workflow run; keep
+          # it only long enough for the packaging/browser jobs to download it.
+          retention-days: 1
 
   integration:
     runs-on: windows-latest
@@ -216,6 +219,15 @@ jobs:
           New-Item -ItemType Directory -Path $pkg -Force | Out-Null
           # Copy backend source (preserves directory structure under backend/)
           Copy-Item -Path "backend" -Destination $pkg -Recurse -Force
+          # Runtime-only artifact: drop dev tooling, build metadata, caches,
+          # local environment files, and any stray old frontend assets.
+          Remove-Item -LiteralPath "$pkg\backend\requirements-dev.txt" -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$pkg\backend\pyproject.toml" -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$pkg\backend\app\static\chat.html" -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$pkg\backend\app\static\chat.js" -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$pkg\backend\app\static\chat.css" -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path $pkg -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path $pkg -Recurse -File -Include ".env", ".env.*", "*.pyc", "*.pyo" | Remove-Item -Force -ErrorAction SilentlyContinue
           Write-Host "Staged $(Get-ChildItem -Path $pkg -Recurse -File | Measure-Object).files into $pkg"
 
       - name: Install backend dependencies
@@ -226,7 +238,8 @@ jobs:
         shell: pwsh
         run: |
           $env:OPENCODE_BIN = ""
-          python -m unittest discover -s tests/backend -t . -v -p test_packaging_smoke.py
+          $env:RTAI_PACKAGE_DIR = "$env:RUNNER_TEMP\rtai-web-package"
+          python -m unittest discover -s tests/backend -t . -v -p "test_packaging*.py"
 
       - name: Upload combined runnable artifact
         uses: actions/upload-artifact@v4
@@ -234,6 +247,10 @@ jobs:
           name: rtai-web-package
           path: ${{ runner.temp }}/rtai-web-package/
           if-no-files-found: error
+          # Users download this artifact for local execution; keep it available
+          # for two weeks (unlike the intermediate frontend-dist, which is
+          # retained for 1 day because it is consumed within the same run).
+          retention-days: 14
 
   playwright-deterministic:
     runs-on: windows-latest

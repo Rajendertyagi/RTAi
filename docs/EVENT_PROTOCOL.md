@@ -41,11 +41,6 @@ correlation fields. The frontend mirror of these shapes lives in
 - Frames whose `protocol_version` differs from 1 are recorded and ignored.
 - TypeScript code uses `unknown` for opaque payloads — never `any`.
 
-> **Legacy note:** until Phase 2 lands, the backend WebSocket also accepts the
-> old Deep Chat `{messages:[...]}` payload format and bare `{type:"cancel"}`.
-> That format is **legacy and unchanged** by this document; the normalized
-> commands below are the Phase-2 target and already spoken by MockTransport.
-
 ## Correlation rules
 
 1. `session_id` is required on session-specific events (selections, turns,

@@ -69,17 +69,15 @@ reliably reproduce (malformed SSE, auth failures, bind races, etc.).
 
 ## Smoke test (manual, real OpenCode)
 
-1. **From source** — build the frontend locally first:
-   ```bash
-   cd frontend && npm ci && npm run build
-   cd ../backend && python run.py
-   ```
-   Open http://127.0.0.1:8090, enter a project folder, click Connect.
-
-2. **From packaged artifact** (no local Node needed):
+1. **From packaged artifact** (no local Node needed):
    - Download the `rtai-web-package` artifact from a successful CI run.
    - Extract it and run `python run.py` inside the `backend/` directory.
    - Open http://127.0.0.1:8090.
+
+2. **From source** — a source checkout has no built frontend, so `/` shows the
+   "Frontend build is missing" diagnostic. To exercise the full UI from source,
+   download the `rtai-web-package` artifact as above (or build the frontend
+   yourself with Node and run `python run.py` in `backend/`).
 
 In both cases: enter an existing project folder and click Connect, send a
 prompt, expect a streamed reply and ACP events in the debug panel, click stop

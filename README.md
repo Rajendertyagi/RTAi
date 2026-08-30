@@ -8,8 +8,8 @@ adapter, not the core.
 ## Status
 
 Phase 0 (repository foundation) complete — see `docs/ROADMAP.md`.
-The legacy Deep Chat POC is preserved under `backend/app/static` and is
-**temporary/legacy**; the React frontend UI replaces it.
+The React/Vite frontend is the only UI; the legacy Deep Chat POC has been
+removed.
 
 ## Architecture in one line
 
@@ -45,24 +45,13 @@ assets live only in CI artifacts. To run without Node:
 
 4. Open <http://127.0.0.1:8090> — the packaged frontend is served at `/`.
 
+If you start the backend from a source checkout that has no built frontend
+(`backend/app/static/dist/` absent), `/` shows an explicit **"Frontend build is
+missing"** diagnostic page instead of the app; `/api/*` and `/ws` still work.
+
 The runtime package contains exactly what is needed to run: backend source,
 requirements, `run.py`, and the pre-built frontend. It excludes tests, caches,
 `.git`, and development tooling.
-
-## Quick start (from source, with local Node)
-
-```bash
-# Build the frontend once (Node ≥ 22 required)
-cd frontend && npm ci && npm run build
-cd ..
-
-# Start the server (port 8090 by default)
-cd backend
-python -m pip install -r requirements.txt
-python run.py
-```
-
-Open <http://127.0.0.1:8090>, enter an existing project folder, click **Connect**.
 
 ## Development
 
@@ -72,18 +61,18 @@ python -m unittest discover -s tests/backend -t . -v
 python -m ruff check backend tests/backend --config backend/pyproject.toml
 cd backend && python -m mypy app
 
-# frontend (requires Node)
+# frontend (requires Node; runs in CI otherwise)
 cd frontend && npm ci && npm run typecheck
 ```
 
-Full commands: `docs/DEVELOPMENT.md`. Testing strategy: `docs/TESTING.md`.
+Testing strategy: `docs/TESTING.md`.
 
 ## Repository map
 
 ```
 backend/    FastAPI app, AgentAdapter + OpenCode ACP adapter, tests
 frontend/   React+Vite+TypeScript chat app
-docs/       product, architecture, event protocol, UI spec, dev, testing, roadmap, ADRs
+docs/       architecture, event protocol, testing, roadmap, ADRs
 tests/      Python unit tests, integration tests, Playwright E2E
 .github/workflows/  CI (build, test, package) — no workflow commits to git
 ```
@@ -95,15 +84,24 @@ in Git**. CI builds it fresh each run and passes it to packaging and browser
 tests via artifact upload/download. The `.gitignore` entry
 `backend/app/static/dist/` prevents accidental commits.
 
+CI artifact retention is intentional and different for the two artifacts:
+
+- **`frontend-dist`** — retained **1 day**. It is an intermediate artifact
+  consumed within the same workflow run (packaging and browser jobs download
+  it), so it needs no longer lifetime.
+- **`rtai-web-package`** — retained **14 days**. Users download this artifact
+  for local execution, so it stays available for two weeks.
+
+Do not raise the `frontend-dist` retention or shorten `rtai-web-package` to a
+day; the difference exists to avoid wasting storage while keeping the runnable
+package downloadable.
+
 ## Key documents
 
 | Doc | Purpose |
 |---|---|
-| [PRODUCT](docs/PRODUCT.md) | problem, use cases, non-goals |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | layers, lifecycles, boundaries |
 | [EVENT_PROTOCOL](docs/EVENT_PROTOCOL.md) | normalized WS event contract |
-| [UI_SPEC](docs/UI_SPEC.md) | legacy Loquix UI structure (superseded by frontend) |
-| [DEVELOPMENT](docs/DEVELOPMENT.md) | setup & commands (Windows/Linux) |
 | [TESTING](docs/TESTING.md) | test layers & conventions |
 | [ROADMAP](docs/ROADMAP.md) | phased plan with statuses |
 | [adr/](docs/adr/) | decision records |
