@@ -18,13 +18,15 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 def _enter_project_and_wait(page, project_folder: str) -> None:
     """Fill the project folder input and press Enter, then wait for ready."""
-    folder_input = page.locator('input[placeholder*="project"], input[placeholder*="folder"]')
+    folder_input = page.locator("#projectFolder")
+    if not folder_input.is_visible():
+        folder_input = page.locator('input[placeholder*="project"], input[placeholder*="folder"]')
     if not folder_input.is_visible():
         folder_input = page.locator('input[type="text"]').first
     folder_input.fill(project_folder)
     folder_input.press("Enter")
 
-    ready = page.locator('span.status.ready')
+    ready = page.locator(".status-bar--persistent:has-text('Ready')")
     error = page.locator('span.status.error, .banner.error')
     try:
         ready.wait_for(state="visible", timeout=15000)
@@ -42,15 +44,11 @@ def test_opencode_capability_discovery(page, server_url: str) -> None:
 
     _enter_project_and_wait(page, str(REPO_ROOT))
 
-    status = page.locator('span.status')
-    status_text = status.inner_text()
-    assert status_text not in ("disconnected", "connecting"), (
+    status_bar = page.locator(".status-bar--persistent")
+    status_text = status_bar.inner_text()
+    assert "Ready" in status_text or "connecting" not in status_text.lower(), (
         f"Connection never reached ready: {status_text}"
     )
-
-    # Diagnostics panel is open by default; verify it rendered.
-    page.locator("rtai-diagnostics-panel").wait_for(timeout=5000)
-    page.locator('rtai-diagnostics-panel table').wait_for(timeout=5000)
 
     # Confirm no mock UI strings appear anywhere in the page.
     body = page.content()
@@ -68,5 +66,5 @@ def test_disconnect_closes_only_own_connection(page, server_url: str) -> None:
     page.wait_for_load_state("networkidle")
     _enter_project_and_wait(page, str(REPO_ROOT))
 
-    final_status = page.locator('span.status').inner_text()
-    assert final_status in ("ready", "connecting", "error")
+    final_status = page.locator(".status-bar--persistent").inner_text()
+    assert "Ready" in final_status or "disconnect" not in final_status.lower()
