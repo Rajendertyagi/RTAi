@@ -1,11 +1,18 @@
 "use client";
 
 import { ThreadPrimitive, AuiIf } from "@assistant-ui/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
+import { Menu } from "lucide-react";
 import { useChatStore } from "../state/chatStore";
 import { MessageItem } from "./Message";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
+
+export interface ChatScreenProps {
+  drawerOpen: boolean;
+  onMenuClick: () => void;
+  menuButtonRef: RefObject<HTMLButtonElement | null>;
+}
 
 // Auto-scroll to bottom when new messages arrive
 function useAutoScroll() {
@@ -30,15 +37,30 @@ function useAutoScroll() {
   return scrollRef;
 }
 
-export function ChatScreen() {
+export function ChatScreen({
+  drawerOpen,
+  onMenuClick,
+  menuButtonRef,
+}: ChatScreenProps) {
   const scrollRef = useAutoScroll();
   const isConnected = useChatStore((s) => s.connected);
   const agentInfo = useChatStore((s) => s.agentInfo);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center border-b border-interactive bg-surface-background px-4">
+        <button
+          type="button"
+          ref={menuButtonRef}
+          onClick={onMenuClick}
+          aria-expanded={drawerOpen}
+          aria-controls="app-sidebar"
+          aria-label="Open navigation menu"
+          className="md:hidden mr-2 flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-transparent text-foreground cursor-pointer transition-colors hover:bg-interactive-hover"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
         <div className="flex items-center gap-2">
           <span className="text-lg font-medium text-foreground">RTAI</span>
           <span
@@ -52,40 +74,42 @@ export function ChatScreen() {
       </header>
 
       {/* Main chat area */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
-          <ThreadPrimitive.Viewport
-            ref={scrollRef}
-            className="flex-1 min-h-0 overflow-y-auto px-4 py-6"
-          >
-            <AuiIf condition={(s) => s.thread.isEmpty}>
-              <div className="mx-auto max-w-md text-center">
-                <h1 className="text-2xl font-normal text-foreground">
-                  What are we working on?
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Start a conversation with the AI assistant
-                </p>
-              </div>
-            </AuiIf>
+      <ThreadPrimitive.Root className="flex min-h-0 min-w-0 w-full flex-1 flex-col">
+        <ThreadPrimitive.Viewport
+          ref={scrollRef}
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+        >
+          <AuiIf condition={(s) => s.thread.isEmpty}>
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-[clamp(1rem,3vw,3rem)] text-center">
+              <h1 className="text-2xl font-normal text-foreground">
+                What are we working on?
+              </h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Start a conversation with the AI assistant
+              </p>
+            </div>
+          </AuiIf>
 
+          <div className="w-full min-w-0 px-[clamp(1rem,3vw,3rem)]">
             <ThreadPrimitive.Messages>
               {({ message }) => <MessageItem message={message} />}
             </ThreadPrimitive.Messages>
+          </div>
 
-            <ThreadPrimitive.ViewportFooter
-              className="sticky bottom-0 z-5 flex flex-col bg-background"
-              data-testid="thread-viewport-footer"
-            >
+          <ThreadPrimitive.ViewportFooter
+            className="sticky bottom-0 z-10 w-full min-w-0 bg-background"
+            data-testid="thread-viewport-footer"
+          >
+            <div className="w-full min-w-0 px-[clamp(1rem,3vw,3rem)]">
               {/* Persistent status bar */}
               <StatusBar />
 
               {/* Composer card */}
               <Composer />
-            </ThreadPrimitive.ViewportFooter>
-          </ThreadPrimitive.Viewport>
-        </ThreadPrimitive.Root>
-      </div>
+            </div>
+          </ThreadPrimitive.ViewportFooter>
+        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Root>
     </div>
   );
 }

@@ -15,7 +15,7 @@ export function Composer() {
 
   return (
     <div
-      className="mx-auto w-[calc(100%-2rem)] max-w-3xl overflow-visible rounded-xl border border-interactive bg-surface-elevated focus-within:ring-2 focus-within:ring-interactive-focus-ring"
+      className="w-full min-w-0 overflow-visible rounded-xl border border-interactive bg-surface-elevated focus-within:ring-2 focus-within:ring-interactive-focus-ring"
       data-testid="composer"
     >
       <ComposerPrimitive.Root>
