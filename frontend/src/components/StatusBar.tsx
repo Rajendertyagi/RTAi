@@ -1,12 +1,15 @@
 "use client";
 
-import { useAui, useAuiState } from "@assistant-ui/react";
+import { useAui } from "@assistant-ui/react";
 import { StopCircle } from "lucide-react";
 import { useChatStore } from "../state/chatStore";
 
 export function StatusBar() {
   const aui = useAui();
-  const isRunning = useAuiState((s) => s.thread.isRunning);
+  // Source running state from our own store (activeTurnId) so the Stop
+  // affordance tracks the real stream. assistant-ui's external runtime does
+  // not reflect this back through thread.isRunning.
+  const isRunning = useChatStore((s) => s.activeTurnId !== null);
   const isConnected = useChatStore((s) => s.connected);
   const agentInfo = useChatStore((s) => s.agentInfo);
   const handleCancel = () => aui.thread().cancelRun();
