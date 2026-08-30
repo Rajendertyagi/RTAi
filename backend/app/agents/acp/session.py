@@ -33,6 +33,7 @@ from ..capabilities import (
     AgentDescriptor,
     CapabilitySection,
     CapabilitySnapshot,
+    SessionCapabilities,
     UnavailabilityReason,
     UnavailableCapability,
 )
@@ -49,6 +50,13 @@ from .mapping import (
 logger = logging.getLogger(__name__)
 
 _PHASE_MESSAGE = "Runtime capability discovery arrives in Phase 2A-B."
+
+
+def _capability_present(container: Any, field: str) -> bool | None:
+    """True when a capability object is present, False when absent, None unknown."""
+    if container is None:
+        return None
+    return getattr(container, field, None) is not None
 
 
 class AcpSession(AgentAdapter):
@@ -88,6 +96,7 @@ class AcpSession(AgentAdapter):
         self._initialized = False
         self._capabilities = AcpCapabilityState()
         self._load_session_cap: bool | None = None
+        self._session_caps: SessionCapabilities | None = None
         self._pending_permissions: dict[str, Any] = {}
         # Tool call ids already announced via tool_start; used to distinguish
         # the first sighting from subsequent streaming/final updates.
@@ -164,6 +173,7 @@ class AcpSession(AgentAdapter):
             self._capabilities.ingest_session_state(jsonable_model(session))
             load_cap = getattr(init_response, "loadSession", None)
             self._load_session_cap = bool(load_cap) if load_cap is not None else None
+            self._session_caps = self._discover_session_capabilities(init_response)
         except BaseException:
             # Startup failed after spawn: clean up exactly what we created and
             # drop the wrapper - there is no owned child left to expose.
@@ -310,9 +320,13 @@ class AcpSession(AgentAdapter):
                 UnavailabilityReason.PENDING_DISCOVERY,
                 "Attachment support is negotiated during initialization.",
             ),
-            sessions=UnavailableCapability(
-                UnavailabilityReason.PENDING_DISCOVERY,
-                "Session feature flags arrive with the initialize response.",
+            sessions=(
+                self._session_caps
+                if self._session_caps is not None
+                else UnavailableCapability(
+                    UnavailabilityReason.PENDING_DISCOVERY,
+                    "Session feature flags arrive with the initialize response.",
+                )
             ),
         )
 
@@ -321,6 +335,30 @@ class AcpSession(AgentAdapter):
         if self._context is not None:
             with contextlib.suppress(Exception):
                 await self._context.__aexit__(None, None, None)
+
+    def _discover_session_capabilities(self, init_response: Any) -> SessionCapabilities:
+        """Read session lifecycle support from the initialize response.
+
+        Capability-state only: this records what the agent advertised but makes
+        no lifecycle wire calls. ACP requires these capability checks before
+        calling ``session/list``, ``session/load`` or ``session/resume``, so the
+        flags are surfaced here for the (deferred) resume entry point.
+        """
+        caps = getattr(init_response, "agent_capabilities", None)
+        if caps is None:
+            return SessionCapabilities()
+        load = getattr(caps, "load_session", None)
+        session_caps = getattr(caps, "session_capabilities", None)
+        return SessionCapabilities(
+            load=bool(load) if load is not None else None,
+            list_sessions=_capability_present(session_caps, "list"),
+            resume=_capability_present(session_caps, "resume"),
+            close=_capability_present(session_caps, "close"),
+            delete=_capability_present(session_caps, "delete"),
+            additional_directories=_capability_present(
+                session_caps, "additional_directories"
+            ),
+        )
 
     def _capture_agent_identity(self, init_response: Any) -> None:
         info = getattr(init_response, "agentInfo", None)

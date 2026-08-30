@@ -3,6 +3,12 @@
 Each incoming WebSocket gets its own adapter instance, its own sequence
 counters, and its own permission tracker.  Cleanup always targets only
 the handle this connection created — never another caller's process.
+
+Chat history (Phase 5): each connection is assigned a server-generated RTAI
+session id; the database session is created only after the project path and
+adapter are validated, and trusted normalized conversation events are
+persisted in order through the ``emit()`` boundary. Persistence failures are
+reported once and degrade gracefully without stopping the live stream.
 """
 
 from __future__ import annotations
@@ -11,13 +17,22 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from ..agents.base import AgentAdapter
+from ..agents.capabilities import SessionCapabilities
 from ..core.protocol import resolve_project_path
+from ..history.models import HistoryEvent, HistorySession, SessionStatus
+from ..history.sanitize import (
+    build_event_key,
+    is_persistable,
+    sanitize_event_payload,
+)
 from ..logging_config import log_event, short_id
 from .protocol_v1 import (
     PROTOCOL_VERSION,
@@ -30,10 +45,104 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+_SESSION_LIST_LIMIT = 50
+_EVENT_LIST_LIMIT = 200
+
 
 @router.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Chat history REST read APIs (Phase 5). Registered before the /api catch-all
+# and the SPA static mount so they are never intercepted.
+# ---------------------------------------------------------------------------
+
+
+def _repo(request: Request):
+    return getattr(request.app.state, "history_repository", None)
+
+
+@router.get("/api/sessions")
+async def list_sessions(
+    request: Request,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=_SESSION_LIST_LIMIT, ge=1, le=200),
+) -> dict[str, Any]:
+    repo = _repo(request)
+    if repo is None:
+        raise HTTPException(status_code=503, detail={"error": "history_unavailable"})
+    items, next_cursor = repo.list_sessions(cursor=cursor, limit=limit)
+    return {
+        "sessions": [_session_dict(s) for s in items],
+        "next_cursor": next_cursor,
+    }
+
+
+@router.get("/api/sessions/{session_id}")
+async def get_session(request: Request, session_id: str) -> dict[str, Any]:
+    repo = _repo(request)
+    if repo is None:
+        raise HTTPException(status_code=503, detail={"error": "history_unavailable"})
+    session = repo.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+    return _session_dict(session)
+
+
+@router.get("/api/sessions/{session_id}/events")
+async def get_session_events(
+    request: Request,
+    session_id: str,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=_EVENT_LIST_LIMIT, ge=1, le=500),
+) -> dict[str, Any]:
+    repo = _repo(request)
+    if repo is None:
+        raise HTTPException(status_code=503, detail={"error": "history_unavailable"})
+    if repo.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+    items, next_cursor = repo.get_events(session_id, cursor=cursor, limit=limit)
+    return {
+        "events": [_event_dict(e) for e in items],
+        "next_cursor": next_cursor,
+    }
+
+
+def _session_dict(session: HistorySession) -> dict[str, Any]:
+    return {
+        "session_id": session.rtai_session_id,
+        "adapter_kind": session.adapter_kind,
+        "native_session_id": session.native_session_id,
+        "cwd": session.cwd,
+        "user_title": session.user_title,
+        "provider_title": session.provider_title,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "last_turn_at": session.last_turn_at,
+        "status": session.status.value,
+        "resume_capable": session.resume_capable,
+        "resume_reason": session.resume_reason,
+    }
+
+
+def _event_dict(event: HistoryEvent) -> dict[str, Any]:
+    return {
+        "event_ordinal": event.event_ordinal,
+        "event_type": event.event_type,
+        "payload": event.payload,
+        "turn_id": event.turn_id,
+        "message_id": event.message_id,
+        "sequence": event.sequence,
+        "timestamp": event.timestamp,
+        "created_at": event.created_at,
+    }
+
+
+# ---------------------------------------------------------------------------
+# WebSocket chat handler
+# ---------------------------------------------------------------------------
 
 
 @router.websocket("/ws")
@@ -42,24 +151,62 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
     log_event(logger, logging.INFO, "ws_accepted", cwd=cwd or "not_provided")
     send_lock = asyncio.Lock()
 
+    # Server-assigned RTAI session id, generated on accept. The database
+    # session is created later, once the project path and adapter are
+    # validated. Never derived from the client-supplied turn_ctx session id.
+    rtai_session_id = str(uuid.uuid4())
+    # Once True, persistence is disabled for the rest of the connection and
+    # diagnostics bypass persistence entirely (no recursion).
+    persist_failed = False
+
     # Correlation aliases for the active turn; updated by the prompt branch.
     turn_ctx: dict[str, str] = {}
     # Monotonic per-turn sequence counter for streaming deltas.
     delta_seq = 0
 
-    async def emit(raw: dict[str, Any]) -> None:
+    async def _persist_frame(frame: dict[str, Any]) -> None:
+        """Persist one trusted normalized frame (best-effort, thread-safe)."""
+        repo = getattr(websocket.app.state, "history_repository", None)
+        if repo is None:
+            return
+        event_type = str(frame.get("type") or "")
+        if not is_persistable(event_type):
+            return
+        payload = sanitize_event_payload(frame)
+        if not payload:
+            return
+        event = HistoryEvent(
+            rtai_session_id=rtai_session_id,
+            event_type=event_type,
+            event_key=build_event_key(
+                event_type,
+                frame.get("turn_id"),
+                frame.get("message_id"),
+                frame.get("sequence"),
+            ),
+            payload=payload,
+            turn_id=frame.get("turn_id"),
+            message_id=frame.get("message_id"),
+            sequence=frame.get("sequence"),
+            timestamp=frame.get("timestamp"),
+            created_at=int(time.time() * 1000),
+        )
+        # Run the synchronous SQLite write off the event loop.
+        await asyncio.to_thread(repo.append_event, event)
+
+    async def emit(raw: dict[str, Any], *, persist: bool = True) -> None:
         """Send a Protocol v1 frame with the authoritative envelope.
 
         ``protocol_version`` is injected here so every outbound frame carries
         the v1 marker the frontend requires.  The field is set after the raw
         payload is copied so adapter-provided values cannot override it.
         """
+        nonlocal delta_seq, persist_failed
         session_id = turn_ctx.get("session_id", "")
         if session_id:
             # Wrap with the authoritative envelope (session_id, turn_id,
             # timestamp, and a per-turn sequence for deltas) so streaming
             # events carry the correlation fields the frontend requires.
-            nonlocal delta_seq
             if raw.get("type") == "delta":
                 delta_seq += 1
             frame = normalize_emission(
@@ -91,6 +238,25 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 event_type=event_type,
                 length=content_length,
             )
+
+        # Persist trusted conversation events in order. On failure, report a
+        # one-time diagnostic that bypasses persistence (no recursion) and
+        # keep the live stream running in degraded mode.
+        if persist and not persist_failed:
+            try:
+                await _persist_frame(frame)
+            except Exception:
+                persist_failed = True
+                log_event(logger, logging.ERROR, "history_persist_failed")
+                await emit(
+                    {
+                        "type": "error",
+                        "message": ("History persistence failed; continuing without saving."),
+                        "code": "history_degraded",
+                    },
+                    persist=False,
+                )
+
         async with send_lock:
             await websocket.send_json(frame)
         if logger.isEnabledFor(logging.DEBUG):
@@ -129,6 +295,7 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
         # This lets chat mode work without a pre-selected project folder.
         if cwd is None:
             import tempfile
+
             session_dir = Path(tempfile.mkdtemp(prefix="rtai-session-"))
             cwd = str(session_dir)
         project = resolve_project_path(cwd)
@@ -137,14 +304,16 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
             log_event(logger, logging.INFO, "project_folder_missing")
             # No cwd supplied and no RTAI_PROJECT_ROOT configured — keep the
             # WebSocket open so the UI can prompt the user for a folder.
-            await emit({
-                "type": "error",
-                "message": (
-                    "No project folder specified. Enter a valid folder path "
-                    "in the control bar, or set RTAI_PROJECT_ROOT."
-                ),
-                "code": "project_folder_not_provided",
-            })
+            await emit(
+                {
+                    "type": "error",
+                    "message": (
+                        "No project folder specified. Enter a valid folder path "
+                        "in the control bar, or set RTAI_PROJECT_ROOT."
+                    ),
+                    "code": "project_folder_not_provided",
+                }
+            )
             # Stay in a holding loop until the client disconnects.
             while True:
                 raw = await websocket.receive_json()
@@ -152,22 +321,32 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     continue
                 kind = raw.get("type")
                 if kind == "prompt":
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": "prompt",
-                        "success": False,
-                        "message": "project_folder_not_provided",
-                    })
-                elif kind in ("cancel", "select_agent", "select_model", "select_mode",
-                              "set_thinking", "permission_response"):
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": kind,
-                        "success": False,
-                        "message": "project_folder_not_provided",
-                    })
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": "prompt",
+                            "success": False,
+                            "message": "project_folder_not_provided",
+                        }
+                    )
+                elif kind in (
+                    "cancel",
+                    "select_agent",
+                    "select_model",
+                    "select_mode",
+                    "set_thinking",
+                    "permission_response",
+                ):
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": kind,
+                            "success": False,
+                            "message": "project_folder_not_provided",
+                        }
+                    )
                 # Ignore everything else; wait for the user to change the folder
                 # and reconnect (which will create a fresh connection with the
                 # new cwd).
@@ -182,9 +361,63 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
     prompt_task: asyncio.Task | None = None
 
     try:
+        # Create the database session now that the project path and adapter
+        # are validated, before the first normalized session event.
+        repo = getattr(websocket.app.state, "history_repository", None)
+        if repo is not None:
+            now = int(time.time() * 1000)
+            adapter_kind = adapter.capability_snapshot().source
+            repo.create_session(
+                HistorySession(
+                    rtai_session_id=rtai_session_id,
+                    adapter_kind=adapter_kind,
+                    cwd=str(project),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            log_event(
+                logger,
+                logging.INFO,
+                "history_session_created",
+                session=short_id(rtai_session_id),
+            )
+
         await emit({"type": "status", "state": "starting", "cwd": str(project)})
         await adapter.start(project, emit)
         log_event(logger, logging.INFO, "adapter_started")
+
+        # Record the provider's native session id and resume capability state.
+        if repo is not None:
+            native_id = None
+            owned = adapter.owned_process()
+            if owned is not None:
+                native_id = owned.session_id
+            snap = adapter.capability_snapshot()
+            resume_capable: bool | None = None
+            resume_reason: str | None = None
+            sessions_cap = getattr(snap, "sessions", None)
+            if isinstance(sessions_cap, SessionCapabilities):
+                resume_capable = sessions_cap.resume
+                if resume_capable is None:
+                    resume_reason = "resume capability not advertised"
+            else:
+                resume_reason = "session capabilities unavailable"
+            if native_id:
+                repo.record_native_mapping(
+                    rtai_session_id,
+                    native_id,
+                    adapter_kind=snap.source,
+                    resume_capable=resume_capable,
+                    resume_reason=resume_reason,
+                )
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "history_native_mapped",
+                    session=short_id(rtai_session_id),
+                    native=short_id(native_id),
+                )
 
         # Emit authoritative capability events before marking ready.
         snap = adapter.capability_snapshot()
@@ -215,13 +448,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                         valid=False,
                         reason=err,
                     )
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": "prompt",
-                        "success": False,
-                        "message": err,
-                    })
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": "prompt",
+                            "success": False,
+                            "message": err,
+                        }
+                    )
                     continue
                 log_event(
                     logger,
@@ -232,13 +467,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 )
                 if prompt_task and not prompt_task.done():
                     log_event(logger, logging.INFO, "prompt_rejected_busy")
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": "prompt",
-                        "success": False,
-                        "message": "A response is already running",
-                    })
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": "prompt",
+                            "success": False,
+                            "message": "A response is already running",
+                        }
+                    )
                     continue
                 session_id: str = raw["session_id"]
                 turn_id: str = raw["turn_id"]
@@ -286,12 +523,14 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                             session=short_id(_session_id),
                             turn=short_id(_turn_id),
                         )
-                        await emit({
-                            "type": "done",
-                            "session_id": _session_id,
-                            "turn_id": _turn_id,
-                            "reason": "cancelled",
-                        })
+                        await emit(
+                            {
+                                "type": "done",
+                                "session_id": _session_id,
+                                "turn_id": _turn_id,
+                                "reason": "cancelled",
+                            }
+                        )
                         raise
                     except Exception as exc:
                         log_event(
@@ -302,28 +541,36 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                             turn=short_id(_turn_id),
                             error=type(exc).__name__,
                         )
-                        await emit({
-                            "type": "error",
-                            "session_id": _session_id,
-                            "turn_id": _turn_id,
-                            "message": str(exc),
-                        })
+                        await emit(
+                            {
+                                "type": "error",
+                                "session_id": _session_id,
+                                "turn_id": _turn_id,
+                                "message": str(exc),
+                            }
+                        )
 
                 prompt_task = asyncio.create_task(_turn())
-                # Emit user_message so the UI binds the response window.
-                await emit({
-                    "type": "user_message",
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "message_id": msg_id,
-                    "text": text,
-                })
-                await emit({
-                    "type": "command_result",
-                    "request_id": raw["request_id"],
-                    "command": "prompt",
-                    "success": True,
-                })
+                # Emit user_message so the UI binds the response window. This
+                # is the single persistence point for the user's message — it
+                # travels through the trusted emit() boundary exactly once.
+                await emit(
+                    {
+                        "type": "user_message",
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "message_id": msg_id,
+                        "text": text,
+                    }
+                )
+                await emit(
+                    {
+                        "type": "command_result",
+                        "request_id": raw["request_id"],
+                        "command": "prompt",
+                        "success": True,
+                    }
+                )
                 continue
 
             # ---- cancel ----
@@ -338,13 +585,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                         valid=False,
                         reason=err,
                     )
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": "cancel",
-                        "success": False,
-                        "message": err,
-                    })
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": "cancel",
+                            "success": False,
+                            "message": err,
+                        }
+                    )
                     continue
                 log_event(
                     logger,
@@ -356,12 +605,14 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 await adapter.cancel()
                 if prompt_task and not prompt_task.done():
                     prompt_task.cancel()
-                await emit({
-                    "type": "command_result",
-                    "request_id": raw["request_id"],
-                    "command": "cancel",
-                    "success": True,
-                })
+                await emit(
+                    {
+                        "type": "command_result",
+                        "request_id": raw["request_id"],
+                        "command": "cancel",
+                        "success": True,
+                    }
+                )
                 continue
 
             # ---- selection commands ----
@@ -376,13 +627,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                         valid=False,
                         reason=err,
                     )
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": kind,
-                        "success": False,
-                        "message": err,
-                    })
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": kind,
+                            "success": False,
+                            "message": err,
+                        }
+                    )
                     continue
                 selection_kind = kind.removeprefix("select_")
                 if kind == "select_agent":
@@ -424,13 +677,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     elif kind == "set_thinking":
                         selected_event["level"] = value_id
                     await emit(selected_event)
-                await emit({
-                    "type": "command_result",
-                    "request_id": raw["request_id"],
-                    "command": kind,
-                    "success": result.applied,
-                    "message": result.message,
-                })
+                await emit(
+                    {
+                        "type": "command_result",
+                        "request_id": raw["request_id"],
+                        "command": kind,
+                        "success": result.applied,
+                        "message": result.message,
+                    }
+                )
                 continue
 
             # ---- permission_response ----
@@ -445,13 +700,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                         valid=False,
                         reason=err,
                     )
-                    await emit({
-                        "type": "command_result",
-                        "request_id": raw.get("request_id"),
-                        "command": "permission_response",
-                        "success": False,
-                        "message": err,
-                    })
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw.get("request_id"),
+                            "command": "permission_response",
+                            "success": False,
+                            "message": err,
+                        }
+                    )
                     continue
                 pid = raw["permission_request_id"]
                 option_id = raw["option_id"]
@@ -466,19 +723,23 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 resolved = False
                 if hasattr(adapter, "respond_to_permission"):
                     resolved = await adapter.respond_to_permission(pid, option_id)
-                await emit({
-                    "type": "permission_result",
-                    "session_id": raw["session_id"],
-                    "turn_id": raw["turn_id"],
-                    "permission_request_id": pid,
-                    "option_id": option_id,
-                })
-                await emit({
-                    "type": "command_result",
-                    "request_id": raw["request_id"],
-                    "command": "permission_response",
-                    "success": resolved,
-                })
+                await emit(
+                    {
+                        "type": "permission_result",
+                        "session_id": raw["session_id"],
+                        "turn_id": raw["turn_id"],
+                        "permission_request_id": pid,
+                        "option_id": option_id,
+                    }
+                )
+                await emit(
+                    {
+                        "type": "command_result",
+                        "request_id": raw["request_id"],
+                        "command": "permission_response",
+                        "success": resolved,
+                    }
+                )
                 continue
 
             # Unknown command — acknowledge failure if request_id present.
@@ -489,13 +750,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     "malformed_command",
                     command=short_id(kind),
                 )
-                await emit({
-                    "type": "command_result",
-                    "request_id": raw["request_id"],
-                    "command": kind or "unknown",
-                    "success": False,
-                    "message": "unknown_command",
-                })
+                await emit(
+                    {
+                        "type": "command_result",
+                        "request_id": raw["request_id"],
+                        "command": kind or "unknown",
+                        "success": False,
+                        "message": "unknown_command",
+                    }
+                )
 
     except WebSocketDisconnect:
         log_event(logger, logging.INFO, "disconnect")
@@ -514,9 +777,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
         with contextlib.suppress(Exception):
             await adapter.close()
         log_event(logger, logging.INFO, "adapter_cleanup")
+        # Mark the persisted session inactive on disconnect.
+        repo = getattr(websocket.app.state, "history_repository", None)
+        if repo is not None:
+            with contextlib.suppress(Exception):
+                repo.set_status(rtai_session_id, SessionStatus.INACTIVE)
         # Clean up the temporary session directory if we created one.
         if session_dir is not None:
             import shutil
+
             shutil.rmtree(session_dir, ignore_errors=True)
 
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -8,19 +11,52 @@ from fastapi.staticfiles import StaticFiles
 
 from .agents.factory import AgentAdapterFactory, create_default_factory
 from .api.routes import router
+from .history.repository import HistoryRepository
+from .history.sqlite_repository import SqliteHistoryRepository
 
 BASE_DIR = Path(__file__).resolve().parent
+
+DATA_DIR_ENV_KEY = "RTAI_DATA_DIR"
+_DEFAULT_DATA_DIR = Path.home() / ".rtai"
+_DB_FILENAME = "rtai.db"
+
+
+def resolve_data_dir(environ: dict[str, str] | None = None) -> Path:
+    """Return the storage root for chat history.
+
+    ``RTAI_DATA_DIR`` wins when set; otherwise ``~/.rtai``. The directory is
+    created lazily by the repository on first open, not here.
+    """
+    env = environ if environ is not None else os.environ
+    raw = (env.get(DATA_DIR_ENV_KEY) or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return _DEFAULT_DATA_DIR
 
 
 def create_app(
     adapter_factory: AgentAdapterFactory | None = None,
+    history_repository: HistoryRepository | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
-    ``adapter_factory`` exists for dependency injection in tests; production
-    defaults to the OpenCode ACP adapter factory.
+    ``adapter_factory`` and ``history_repository`` exist for dependency
+    injection in tests; production defaults to the OpenCode ACP adapter
+    factory and a SQLite history repository under the data directory.
     """
-    app = FastAPI(title="RTAI")
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        repo = history_repository
+        if repo is None:
+            repo = SqliteHistoryRepository(resolve_data_dir() / _DB_FILENAME)
+        _app.state.history_repository = repo
+        try:
+            yield
+        finally:
+            repo.close()
+
+    app = FastAPI(title="RTAI", lifespan=lifespan)
     factory = adapter_factory if adapter_factory is not None else create_default_factory()
     app.state.adapter_factory = factory
     app.include_router(router)

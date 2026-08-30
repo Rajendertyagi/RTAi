@@ -83,9 +83,17 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 ## Phase 5 — SQLite session history
 | Feature | Status |
 |---|---|
-| Storage service behind interface | planned |
+| Storage service behind interface (`history/` repository) | complete |
+| SQLite schema + migrations (WAL, partial native-id index, event dedup) | complete |
+| Persist normalized transcript events (sanitized allowlist, per-session ordinal) | complete |
+| REST read APIs: `GET /api/sessions`, `/api/sessions/{id}`, `/api/sessions/{id}/events` | complete |
+| Session capability state surfaced via `CapabilitySnapshot.sessions` | complete |
 | Session sidebar backed by SQLite | planned |
 | Resume session via AgentAdapter | planned |
+
+> Phase 5 landed backend-only: persistent storage and REST read APIs. The
+> frontend sidebar and native session resume remain planned; native continuation
+> is deferred to a later phase.
 
 ## Phase 6 — Tauri desktop wrapper
 | Feature | Status |

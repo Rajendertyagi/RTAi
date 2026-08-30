@@ -38,6 +38,7 @@ backend/app/
 ├── api/       HTTP + WebSocket routes (thin; no agent logic)
 ├── agents/    base.py contract + one folder-member per backend (opencode_acp.py)
 ├── core/      protocol helpers shared across layers
+├── history/   SQLite session + transcript persistence (Phase 5)
 ├── services/  session orchestration (introduced in Phase 2)
 └── main.py    FastAPI factory, static mount for the built React frontend
 ```
@@ -110,7 +111,63 @@ id; cancellation and teardown apply only to that session; scanning or killing
 OpenCode processes by name is prohibited; a user's own OpenCode instances are
 never started, discovered, reused, or terminated.
 
+## Session history (Phase 5)
+
+Backend-only persistent chat history lives in `backend/app/history/`. It is a
+provider-neutral store: application code depends on the `HistoryRepository`
+protocol (`history/repository.py`), never on SQLite directly.
+
+### Storage location and configuration
+
+- Data root: `RTAI_DATA_DIR` env var, else `Path.home() / ".rtai"`.
+- Database file: `<data_root>/rtai.db` (with `rtai.db-wal` and `rtai.db-shm`
+  alongside in WAL mode).
+- Backups must either checkpoint SQLite or copy all three files together.
+
+### Schema ownership and migrations
+
+- Schema is owned by `history/migrations.py` (schema v1 + a migration runner).
+- Every connection sets `PRAGMA journal_mode=WAL` (verified to return `wal`),
+  `synchronous=NORMAL`, `foreign_keys=ON`, and `busy_timeout=5000`.
+- Connections are per-operation (never one shared global connection across
+  FastAPI threads); transactions are short and explicit.
+
+### What is stored
+
+- **Sessions**: server-assigned `rtai_session_id` (created once, before the
+  first stored event), adapter kind, working directory, title, status, and
+  timestamps. A partial unique index enforces one row per
+  `(adapter_kind, native_session_id)` when a native id is present.
+- **Transcript events**: normalized Protocol v1 conversation events, in order,
+  each with a repository-assigned monotonic `event_ordinal` per session and a
+  deterministic `event_key` for idempotent dedup. Persisted payloads are
+  sanitized by an allowlist (`history/sanitize.py`) that keeps only trusted
+  fields and drops credentials, raw provider payloads, process commands, and
+  unsafe debug/data content.
+
+### Transcript vs. resume
+
+Persisting a transcript is **not** the same as resuming a session. Native
+continuation (re-attaching to a live agent session) is deferred to a later
+phase. This phase records capability state only: whether the active adapter
+exposes session load/list/resume/close, surfaced through the existing
+`CapabilitySnapshot.sessions` field. The UI disables resume when the provider
+does not expose it.
+
+### REST read APIs
+
+- `GET /api/sessions` — list sessions (keyset pagination).
+- `GET /api/sessions/{session_id}` — session detail.
+- `GET /api/sessions/{session_id}/events` — transcript events (keyset
+  pagination by `(event_ordinal, id)`).
+
+### Adapter matrix
+
+| Adapter | Session capability reporting |
+|---|---|
+| OpenCode ACP (`opencode_acp.py`) | Mapped from ACP `agent_capabilities` |
+| OpenCode Server (`opencode/server_adapter.py`) | `NOT_EXPOSED_BY_PROVIDER` (no list/load/resume endpoints) |
+
 ## Future boundaries
 
-- **SQLite** (Phase 5): persistence lives behind a storage service; adapters and routes stay unaware.
 - **Tauri** (Phase 6): replaces only the Transport implementation; zero component changes.

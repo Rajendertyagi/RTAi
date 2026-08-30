@@ -539,8 +539,9 @@ class OpenCodeServerAdapter(AgentAdapter):
                 "The OpenCode server API exposes no attachment size/type limits.",
             ),
             "sessions": UnavailableCapability(
-                UnavailabilityReason.PENDING_DISCOVERY,
-                "Session capability flags require initialize-time negotiation.",
+                UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER,
+                "The OpenCode server API exposes no session list/load/resume "
+                "endpoints; session lifecycle is not available on this adapter.",
             ),
         }
         if self._agents_section is not None:
