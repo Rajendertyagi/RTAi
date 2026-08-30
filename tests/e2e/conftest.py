@@ -46,6 +46,8 @@ def server_url():
 
     adapter_factory = None
     if os.environ.get("RTAI_TEST_ADAPTER") == "fake":
+        import asyncio  # noqa: E402
+
         from unittest.mock import MagicMock  # noqa: E402
 
         from app.agents.base import AgentAdapter, SelectionResult  # noqa: E402
@@ -57,6 +59,8 @@ def server_url():
 
         class FakeAdapter(AgentAdapter):
             def __init__(self) -> None:
+                self._emit = None
+                self._cancelled = False
                 self._snap = CapabilitySnapshot(
                     source="fake",
                     agent=AgentDescriptor(id="fake-agent", label="FakeAgent"),
@@ -76,6 +80,7 @@ def server_url():
                 )
 
             async def start(self, cwd, emit):  # type: ignore[override]
+                self._emit = emit
                 await emit({"type": "status", "state": "starting", "cwd": str(cwd)})
                 await emit({"type": "agent_info", "name": "FakeAgent"})
                 await emit({
@@ -103,10 +108,67 @@ def server_url():
                 return self._snap
 
             async def submit_prompt(self, text: str) -> None:
-                pass
+                """Stream a deterministic markdown reply, then finalize.
+
+                Cancellable: a mid-stream ``cancel()`` or task cancellation stops
+                the loop; the routes layer emits the terminal ``done`` event.
+                """
+                self._cancelled = False
+                if self._emit is None:
+                    return
+                document = "\n".join([
+                    "# RTAI Deterministic Response",
+                    "",
+                    "This is a **streamed** assistant reply used by the E2E suite.",
+                    "",
+                    "## Features",
+                    "",
+                    "- Streaming text rendering",
+                    "- Markdown support everywhere",
+                    "- Inline `code` snippets work",
+                    "",
+                    "### Steps",
+                    "",
+                    "1. Connect to the WebSocket",
+                    "2. Submit a prompt",
+                    "3. Receive streamed deltas",
+                    "",
+                    "> A blockquote kept for layout verification.",
+                    "",
+                    "See the [documentation](https://example.com) for details.",
+                    "",
+                    "```python",
+                    "def greet(name: str) -> str:",
+                    '    return f"hello {name}"',
+                    "```",
+                    "",
+                    "Final paragraph with extra words so the stream visibly grows "
+                    "over time, giving the auto-scroll and growth assertions "
+                    "something observable.",
+                ])
+                chunks: list[str] = []
+                current = ""
+                for word in document.split(" "):
+                    if current and len(current) + len(word) + 1 > 24:
+                        chunks.append(current + " ")
+                        current = word
+                    else:
+                        current = (current + " " + word) if current else word
+                if current:
+                    chunks.append(current)
+                try:
+                    for chunk in chunks:
+                        if self._cancelled:
+                            break
+                        await self._emit({"type": "delta", "text": chunk})
+                        await asyncio.sleep(0.04)
+                except asyncio.CancelledError:
+                    raise
+                if not self._cancelled:
+                    await self._emit({"type": "done", "reason": "completed"})
 
             async def cancel(self) -> None:
-                pass
+                self._cancelled = True
 
             def owned_process(self):
                 return None

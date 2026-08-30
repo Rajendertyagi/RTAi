@@ -9,7 +9,14 @@ import { ToolCard } from "./ToolCard";
 // and its props are incompatible with TextMessagePartProps. We must not spread
 // the part props ╬ô├ç├╢ instead render it without props so it reads from context.
 function MarkdownTextWrapper(_props: TextMessagePartProps) {
-  return <MarkdownTextPrimitive />;
+  // Render inside .message__content so the rich markdown styles in styles.css
+  // (headings, lists, links, blockquote, code, tables) apply. Do NOT spread the
+  // part props onto MarkdownTextPrimitive; it reads text from context.
+  return (
+    <div className="message__content">
+      <MarkdownTextPrimitive />
+    </div>
+  );
 }
 
 const messagePartsComponents = {

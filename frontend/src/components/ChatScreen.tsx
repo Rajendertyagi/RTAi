@@ -56,10 +56,10 @@ export function ChatScreen() {
 
       {/* Main chat area */}
       <div className="app__main flex min-h-0 flex-1 overflow-hidden">
-        <ThreadPrimitive.Root className="flex h-full flex-col">
+        <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
           <ThreadPrimitive.Viewport
             ref={scrollRef}
-            className="chat__messages flex-1 overflow-y-auto px-4 py-6"
+            className="chat__messages flex-1 min-h-0 overflow-y-auto px-4 py-6"
           >
             <AuiIf condition={(s) => s.thread.isEmpty}>
               <div className="empty-state mx-auto max-w-md text-center">
@@ -75,13 +75,18 @@ export function ChatScreen() {
             <ThreadPrimitive.Messages>
               {({ message }) => <MessageItem message={message} />}
             </ThreadPrimitive.Messages>
+
+            <ThreadPrimitive.ViewportFooter
+              className="thread-footer"
+              data-testid="thread-viewport-footer"
+            >
+              {/* Persistent status bar */}
+              <StatusBar />
+
+              {/* Composer card */}
+              <Composer />
+            </ThreadPrimitive.ViewportFooter>
           </ThreadPrimitive.Viewport>
-
-          {/* Persistent status bar */}
-          <StatusBar />
-
-          {/* Composer card */}
-          <Composer />
         </ThreadPrimitive.Root>
       </div>
     </div>
