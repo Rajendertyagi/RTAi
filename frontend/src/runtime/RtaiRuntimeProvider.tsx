@@ -25,6 +25,7 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const turnId = useChatStore((s) => s.turnId);
   const setConnected = useChatStore((s) => s.setConnected);
   const handleMessage = useChatStore((s) => s.handleMessage);
+  const registerSend = useChatStore((s) => s.registerSend);
 
   // WebSocket hook — declared before use in the runtime callbacks below.
   const socketRef = useRef<{ send: (cmd: ClientCommand) => void } | null>(null);
@@ -39,6 +40,14 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     socketRef.current = { send: socket.send };
   }, [socket.send]);
+
+  // Register the socket's send with the chat store so selection actions
+  // (select_agent / select_model / select_mode / set_thinking) can dispatch
+  // through the established transport boundary. The store never holds the
+  // WebSocket directly.
+  useEffect(() => {
+    registerSend(socket.send);
+  }, [registerSend, socket.send]);
 
   // Convert our backend message format to assistant-ui ThreadMessageLike.
   // The adapter calls this; we pass raw messages + this converter (not
@@ -94,10 +103,14 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
       const newTurnId = `turn-${Date.now()}`;
       const newMessageId = `msg-${Date.now()}`;
 
-      // Update store with new IDs
+      // Update store with new IDs. A new turn replaces the session, so any
+      // in-flight selection requests from the previous session are stale and
+      // cleared here (correlation rule: clear pending on session replacement).
       useChatStore.setState({
         sessionId: newSessionId,
         turnId: newTurnId,
+        pendingSelections: new Map(),
+        lastError: null,
       });
 
       // Send prompt via socket

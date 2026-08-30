@@ -16,6 +16,14 @@ export interface ProtocolEnvelope {
   request_id?: string;
 }
 
+// Runtime-provided unavailability reason for a capability section.
+// Only ever set from `*_available` events when the backend reports
+// `available: false`; never constructed client-side as a fallback.
+export interface UnavailableReason {
+  reason_code: string;
+  reason_message: string;
+}
+
 // === Backend → UI Events ===
 
 export type ServerEvent =
@@ -23,15 +31,15 @@ export type ServerEvent =
   | { type: "status"; state: "starting" | "ready" | "disconnected"; cwd?: string }
   | { type: "agent_info"; name: string }
   // Capabilities
-  | { type: "agents_available"; agents: CapabilityItem[]; available?: boolean }
+  | { type: "agents_available"; agents: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "agent_selected"; session_id: string; agent_id: string }
-  | { type: "models_available"; models: CapabilityItem[]; available?: boolean }
+  | { type: "models_available"; models: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "model_selected"; model_id: string }
-  | { type: "modes_available"; modes: CapabilityItem[]; available?: boolean }
+  | { type: "modes_available"; modes: CapabilityItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "mode_selected"; mode_id: string }
-  | { type: "thinking_available"; thinking_levels: string[]; model_id?: string; available?: boolean }
+  | { type: "thinking_available"; thinking_levels: string[]; model_id?: string; available?: boolean; reason_code?: string; reason_message?: string }
   | { type: "thinking_selected"; level: string; model_id?: string }
-  | { type: "commands_available"; commands: CommandItem[]; available?: boolean }
+  | { type: "commands_available"; commands: CommandItem[]; available?: boolean; reason_code?: string; reason_message?: string }
   // Messages
   | { type: "user_message"; session_id: string; turn_id: string; message_id: string; text: string }
   | { type: "delta"; session_id: string; turn_id: string; sequence: number; text: string }

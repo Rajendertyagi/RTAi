@@ -9,6 +9,7 @@ import type {
   ToolCall,
   ToolCallStatus,
   ToolStatus,
+  UnavailableReason,
 } from "../types/protocol";
 
 // A single chat message in our backend format (before conversion to
@@ -20,6 +21,15 @@ export interface ChatMessage {
   text: string;
   tools: ToolCall[];
   timestamp: number;
+}
+
+// A selection request awaiting authoritative confirmation from the backend.
+// Keyed in the store by the Protocol v1 `request_id` so multiple, distinct
+// pending selections (e.g. model + thinking) can coexist without a single
+// global "pending" boolean.
+export interface PendingSelection {
+  type: "agent" | "model" | "mode" | "thinking";
+  option: string;
 }
 
 // Data half of the store. Kept separate from the actions so `initialState`
@@ -50,6 +60,25 @@ export interface ChatStateData {
   selectedMode: string | null;
   thinkingLevel: string;
 
+  // Unavailability reasons (runtime-provided, never invented client-side).
+  // Captured from `*_available` events carrying `available: false` so the
+  // composer can render an honest, disabled control with the real reason.
+  agentsReason: UnavailableReason | null;
+  modelsReason: UnavailableReason | null;
+  modesReason: UnavailableReason | null;
+  thinkingReason: UnavailableReason | null;
+  commandsReason: UnavailableReason | null;
+
+  // Selection pending correlation: request_id -> { type, option }.
+  pendingSelections: Map<string, PendingSelection>;
+  // Last normalized selection failure (cleared on success / new turn).
+  lastError: { code?: string; message: string } | null;
+
+  // Transport dispatch, registered by the runtime provider. The store never
+  // talks to the WebSocket directly — it calls this callback so the
+  // established transport boundary stays the single owner of the socket.
+  sendCommand: ((cmd: ClientCommand) => void) | null;
+
   pendingPermissions: Map<string, PermissionRequest>;
 }
 
@@ -62,6 +91,7 @@ export interface ChatStateActions {
   selectModel: (modelId: string) => void;
   selectMode: (modeId: string) => void;
   setThinkingLevel: (level: string) => void;
+  registerSend: (send: (cmd: ClientCommand) => void) => void;
   respondToPermission: (requestId: string, optionId: string) => void;
   resetSession: () => void;
 }
@@ -69,6 +99,17 @@ export interface ChatStateActions {
 export type ChatState = ChatStateData & ChatStateActions;
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+// Derive a stored reason object from a backend `available: false` frame.
+// Falls back to a neutral code/message only when the backend omitted both,
+// never to a fabricated "default" capability value.
+const reasonFrom = (ev: {
+  reason_code?: string;
+  reason_message?: string;
+}): UnavailableReason => ({
+  reason_code: ev.reason_code ?? "not_exposed_by_provider",
+  reason_message: ev.reason_message ?? "Not available",
+});
 
 const initialState: ChatStateData = {
   connected: false,
@@ -88,7 +129,15 @@ const initialState: ChatStateData = {
   selectedAgent: null,
   selectedModel: null,
   selectedMode: null,
-  thinkingLevel: "off",
+  thinkingLevel: "",
+  agentsReason: null,
+  modelsReason: null,
+  modesReason: null,
+  thinkingReason: null,
+  commandsReason: null,
+  pendingSelections: new Map(),
+  lastError: null,
+  sendCommand: null,
   pendingPermissions: new Map(),
 };
 
@@ -128,6 +177,10 @@ export const useChatStore = create<ChatState>()(
               set({ connectionState: "connecting" });
             } else {
               set({ connectionState: "disconnected", connected: false });
+              // Connection lost — in-flight selections can no longer resolve.
+              if (state.pendingSelections.size > 0) {
+                set({ pendingSelections: new Map() });
+              }
             }
             break;
           }
@@ -137,13 +190,15 @@ export const useChatStore = create<ChatState>()(
             break;
 
           case "agents_available": {
-            if (event.available !== false && event.agents.length > 0) {
-              set({ agents: event.agents });
-              const first = event.agents[0];
-              if (!state.selectedAgent && first) {
-                set({ selectedAgent: first.id });
-              }
+            if (event.available === false) {
+              // Unavailable: store the runtime reason, drop any stale items,
+              // and do NOT invent a fake list or auto-select.
+              set({ agents: [], agentsReason: reasonFrom(event) });
+            } else {
+              set({ agents: event.agents, agentsReason: null });
             }
+            // Never auto-select first: the authoritative value arrives via
+            // `agent_selected`. Keep `selectedAgent` untouched.
             break;
           }
 
@@ -154,12 +209,10 @@ export const useChatStore = create<ChatState>()(
             break;
 
           case "models_available": {
-            if (event.available !== false && event.models.length > 0) {
-              set({ models: event.models });
-              const first = event.models[0];
-              if (!state.selectedModel && first) {
-                set({ selectedModel: first.id });
-              }
+            if (event.available === false) {
+              set({ models: [], modelsReason: reasonFrom(event) });
+            } else {
+              set({ models: event.models, modelsReason: null });
             }
             break;
           }
@@ -168,31 +221,66 @@ export const useChatStore = create<ChatState>()(
             set({ selectedModel: event.model_id });
             break;
 
-          case "modes_available":
-            if (event.available !== false && event.modes.length > 0) {
-              set({ modes: event.modes });
+          case "modes_available": {
+            if (event.available === false) {
+              set({ modes: [], modesReason: reasonFrom(event) });
+            } else {
+              set({ modes: event.modes, modesReason: null });
             }
             break;
+          }
 
           case "mode_selected":
             set({ selectedMode: event.mode_id });
             break;
 
-          case "thinking_available":
-            if (event.available !== false) {
-              set({ thinkingLevels: event.thinking_levels });
+          case "thinking_available": {
+            if (event.available === false) {
+              set({ thinkingLevels: [], thinkingReason: reasonFrom(event) });
+            } else {
+              set({
+                thinkingLevels: event.thinking_levels,
+                thinkingReason: null,
+              });
             }
             break;
+          }
 
           case "thinking_selected":
             set({ thinkingLevel: event.level });
             break;
 
-          case "commands_available":
-            if (event.available !== false) {
-              set({ commands: event.commands });
+          case "commands_available": {
+            if (event.available === false) {
+              set({ commands: [], commandsReason: reasonFrom(event) });
+            } else {
+              set({ commands: event.commands, commandsReason: null });
             }
             break;
+          }
+
+          case "command_result": {
+            // Correlate by request_id. A matching pending entry means this
+            // result resolves a selection we initiated.
+            const pending = state.pendingSelections.get(event.request_id);
+            if (!pending) break; // foreign / unknown result — ignore.
+            const next = new Map(state.pendingSelections);
+            next.delete(event.request_id);
+            if (!event.success) {
+              // Failure: drop the pending flag but KEEP the previous
+              // authoritative selection; surface the normalized error.
+              set({
+                pendingSelections: next,
+                lastError: {
+                  code: event.code,
+                  message: event.message ?? "Selection failed",
+                },
+              });
+            } else {
+              set({ pendingSelections: next, lastError: null });
+            }
+            break;
+          }
 
           case "user_message": {
             if (event.session_id !== state.sessionId) break;
@@ -384,10 +472,78 @@ export const useChatStore = create<ChatState>()(
         }
       },
 
-      selectAgent: (agentId) => set({ selectedAgent: agentId }),
-      selectModel: (modelId) => set({ selectedModel: modelId }),
-      selectMode: (modeId) => set({ selectedMode: modeId }),
-      setThinkingLevel: (level) => set({ thinkingLevel: level }),
+      selectAgent: (agentId) => {
+        const { sendCommand, sessionId, selectedAgent, pendingSelections } =
+          get();
+        if (!sendCommand || agentId === selectedAgent) return;
+        const requestId = generateId();
+        const next = new Map(pendingSelections);
+        next.set(requestId, { type: "agent", option: agentId });
+        set({ pendingSelections: next });
+        sendCommand({
+          protocol_version: 1,
+          request_id: requestId,
+          type: "select_agent",
+          session_id: sessionId,
+          agent_id: agentId,
+        });
+      },
+
+      selectModel: (modelId) => {
+        const { sendCommand, sessionId, selectedModel, pendingSelections } =
+          get();
+        if (!sendCommand || modelId === selectedModel) return;
+        const requestId = generateId();
+        const next = new Map(pendingSelections);
+        next.set(requestId, { type: "model", option: modelId });
+        set({ pendingSelections: next });
+        sendCommand({
+          protocol_version: 1,
+          request_id: requestId,
+          type: "select_model",
+          session_id: sessionId,
+          model_id: modelId,
+        });
+      },
+
+      selectMode: (modeId) => {
+        const { sendCommand, sessionId, selectedMode, pendingSelections } =
+          get();
+        if (!sendCommand || modeId === selectedMode) return;
+        const requestId = generateId();
+        const next = new Map(pendingSelections);
+        next.set(requestId, { type: "mode", option: modeId });
+        set({ pendingSelections: next });
+        sendCommand({
+          protocol_version: 1,
+          request_id: requestId,
+          type: "select_mode",
+          session_id: sessionId,
+          mode_id: modeId,
+        });
+      },
+
+      setThinkingLevel: (level) => {
+        const { sendCommand, sessionId, thinkingLevel, pendingSelections } =
+          get();
+        if (!sendCommand || level === thinkingLevel) return;
+        const requestId = generateId();
+        const next = new Map(pendingSelections);
+        next.set(requestId, { type: "thinking", option: level });
+        set({ pendingSelections: next });
+        sendCommand({
+          protocol_version: 1,
+          request_id: requestId,
+          type: "set_thinking",
+          session_id: sessionId,
+          level,
+        });
+      },
+
+      // The runtime provider registers its socket dispatch here. The store
+      // then routes selection commands through this callback rather than
+      // holding a WebSocket reference itself.
+      registerSend: (send) => set({ sendCommand: send }),
 
       respondToPermission: (requestId) => {
         // The actual permission_response is sent over the socket by the UI;
@@ -405,6 +561,8 @@ export const useChatStore = create<ChatState>()(
           messages: [],
           activeTurnId: null,
           activeMessageId: null,
+          pendingSelections: new Map(),
+          lastError: null,
         }),
     }),
     { name: "RTAI Chat Store" },
