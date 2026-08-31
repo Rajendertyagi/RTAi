@@ -745,6 +745,37 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     session=short_id(raw.get("session_id")),
                     turn=short_id(raw.get("turn_id")),
                 )
+                # The cancel must target the exact active turn. A cancel whose
+                # session/turn does not match the active turn (stale, mismatched,
+                # or no turn in flight) is a safe idempotent no-op: it must never
+                # cancel a newer/different turn. Only one turn is active per
+                # WebSocket, so the active turn is the sole cancellation target.
+                active_session = turn_ctx.get("session_id")
+                active_turn = turn_ctx.get("turn_id")
+                target_session = raw.get("session_id")
+                target_turn = raw.get("turn_id")
+                if (
+                    not prompt_task
+                    or prompt_task.done()
+                    or active_session != target_session
+                    or active_turn != target_turn
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "cancellation_noop",
+                        session=short_id(target_session),
+                        turn=short_id(target_turn),
+                    )
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw["request_id"],
+                            "command": "cancel",
+                            "success": True,
+                        }
+                    )
+                    continue
                 await adapter.cancel()
                 if prompt_task and not prompt_task.done():
                     prompt_task.cancel()

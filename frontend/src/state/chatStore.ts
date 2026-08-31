@@ -43,6 +43,9 @@ export interface ChatStateData {
   sessionId: string;
   turnId: string;
   messageId: string;
+  promptRequestId: string | null;
+  cancelRequestId: string | null;
+  cancelPending: boolean;
 
   messages: ChatMessage[];
   activeTurnId: string | null;
@@ -98,7 +101,7 @@ export interface ChatStateActions {
 
 export type ChatState = ChatStateData & ChatStateActions;
 
-const generateId = () => `id-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+const generateId = () => crypto.randomUUID();
 
 // Derive a stored reason object from a backend `available: false` frame.
 // Falls back to a neutral code/message only when the backend omitted both,
@@ -118,6 +121,9 @@ const initialState: ChatStateData = {
   sessionId: generateId(),
   turnId: generateId(),
   messageId: generateId(),
+  promptRequestId: null,
+  cancelRequestId: null,
+  cancelPending: false,
   messages: [],
   activeTurnId: null,
   activeMessageId: null,
@@ -336,8 +342,17 @@ export const useChatStore = create<ChatState>()(
           }
 
           case "done":
-            if (event.session_id === state.sessionId) {
-              set({ activeTurnId: null });
+            if (
+              event.session_id === state.sessionId &&
+              event.turn_id === state.activeTurnId
+            ) {
+              set({
+                activeTurnId: null,
+                activeMessageId: null,
+                promptRequestId: null,
+                cancelRequestId: null,
+                cancelPending: false,
+              });
             }
             break;
 
@@ -459,8 +474,17 @@ export const useChatStore = create<ChatState>()(
           }
 
           case "cancelled":
-            if (event.session_id === state.sessionId) {
-              set({ activeTurnId: null });
+            if (
+              event.session_id === state.sessionId &&
+              event.turn_id === state.activeTurnId
+            ) {
+              set({
+                activeTurnId: null,
+                activeMessageId: null,
+                promptRequestId: null,
+                cancelRequestId: null,
+                cancelPending: false,
+              });
             }
             break;
 
@@ -556,8 +580,11 @@ export const useChatStore = create<ChatState>()(
       resetSession: () =>
         set({
           sessionId: generateId(),
-          turnId: generateId(),
-          messageId: generateId(),
+          turnId: "",
+          messageId: "",
+          promptRequestId: null,
+          cancelRequestId: null,
+          cancelPending: false,
           messages: [],
           activeTurnId: null,
           activeMessageId: null,

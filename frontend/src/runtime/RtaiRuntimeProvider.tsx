@@ -98,17 +98,24 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         message.content[0]?.type === "text" ? message.content[0].text : "";
       if (!text.trim()) return;
 
-      // Generate IDs for this turn
-      const newSessionId = `${sessionId}-turn-${Date.now()}`;
-      const newTurnId = `turn-${Date.now()}`;
-      const newMessageId = `msg-${Date.now()}`;
+      // Identity contract: the conversation session_id is stable across every
+      // turn in one chat. Each prompt gets its own distinct turn_id,
+      // message_id and request_id — none is derived from or embedded in the
+      // session id, and request_id is never reused as message_id.
+      const newTurnId = crypto.randomUUID();
+      const newMessageId = crypto.randomUUID();
+      const newRequestId = crypto.randomUUID();
 
-      // Update store with new IDs. A new turn replaces the session, so any
-      // in-flight selection requests from the previous session are stale and
-      // cleared here (correlation rule: clear pending on session replacement).
+      // Update store with the new turn's identities. The session id is NOT
+      // changed here — it stays stable for the whole conversation. In-flight
+      // selection requests from the previous turn are stale and cleared here
+      // (correlation rule: clear pending on new turn).
       useChatStore.setState({
-        sessionId: newSessionId,
         turnId: newTurnId,
+        messageId: newMessageId,
+        promptRequestId: newRequestId,
+        cancelRequestId: null,
+        cancelPending: false,
         pendingSelections: new Map(),
         lastError: null,
       });
@@ -116,9 +123,9 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
       // Send prompt via socket
       const command: ClientCommand = {
         protocol_version: 1,
-        request_id: newMessageId,
+        request_id: newRequestId,
         type: "prompt",
-        session_id: newSessionId,
+        session_id: sessionId,
         turn_id: newTurnId,
         message_id: newMessageId,
         text: text,
@@ -127,9 +134,17 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
       socketRef.current?.send(command);
     },
     onCancel: async () => {
+      // Each cancel is a distinct protocol command with its own request_id.
+      // It reuses the target prompt's stable session_id and active turn_id,
+      // never the prompt's request_id.
+      const cancelRequestId = crypto.randomUUID();
+      useChatStore.setState({
+        cancelRequestId,
+        cancelPending: true,
+      });
       const command: ClientCommand = {
         protocol_version: 1,
-        request_id: `cancel-${Date.now()}`,
+        request_id: cancelRequestId,
         type: "cancel",
         session_id: sessionId,
         turn_id: turnId,

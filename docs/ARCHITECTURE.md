@@ -87,6 +87,35 @@ a dialog built from the request's options and forwards the user's choice as a
 `permission_response`; the adapter resolves the pending request with that
 option.
 
+## Identity ownership and lifecycle
+
+Identifiers are UUIDs (`crypto.randomUUID()` in the frontend) and each has one
+purpose; none is encoded inside another.
+
+| Identifier | Owner | Lifecycle |
+|---|---|---|
+| `session_id` | Frontend | Stable logical conversation identity. Created once per chat, unchanged across every turn, replaced only by New Chat. |
+| `turn_id` | Frontend | One per prompt execution, generated before dispatch so the turn can be cancelled before the first response. |
+| `message_id` | Frontend | One per logical message; never reused as a command `request_id`. |
+| `request_id` | Frontend | One per protocol command; prompt and cancel commands get different IDs. |
+| `rtai_session_id` | Backend | Server-assigned history identity, one per WebSocket, used only for the SQLite transcript store. |
+
+The frontend owns the conversation `session_id` and reuses it for every turn
+in a chat; it never appends turn or message identity to it. The backend
+independently assigns `rtai_session_id` on accept for history persistence and
+never derives it from the client `session_id`. The two are distinct and not
+interchangeable (see `docs/EVENT_PROTOCOL.md`).
+
+### One active turn per WebSocket
+
+Each WebSocket supports exactly one active turn at a time. A second prompt
+while a turn is active is rejected honestly with a failed `command_result`
+(`"A response is already running"`); it is never silently replaced or
+cancelled. Cancellation targets only the active turn: the backend matches the
+cancel's `session_id`/`turn_id` against the active turn and treats a stale or
+mismatched cancel as a safe idempotent no-op. The terminal event for a
+cancelled turn is `done {reason: "cancelled"}`, emitted exactly once.
+
 ## Prompt content boundary
 
 RTAI uses a **provider-neutral prompt content model** at the adapter

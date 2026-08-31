@@ -47,8 +47,8 @@ correlation fields. The frontend mirror of these shapes lives in
    tool activity, permissions). Frames naming a different session than the
    active one must not mutate UI state.
 2. `turn_id` is required on all prompt/generation events. Response-window
-   events (`delta`, `done`, `tool_*`, `cancelled`) apply only when their turn
-   matches the active turn.
+   events (`delta`, `done`, `tool_*`) apply only when their turn matches the
+   active turn.
 3. `message_id` is required on user and assistant messages.
 4. Streaming events carry an increasing `sequence`; deltas with a sequence ≤
    the last applied one are duplicates and must not append text.
@@ -56,8 +56,40 @@ correlation fields. The frontend mirror of these shapes lives in
 6. Selection state changes come **only** from authoritative selected-state
    events (`*_selected`); `command_result` acknowledgements never mutate
    selections.
-7. Currently `session_id` equals the UI's in-memory session id. Phase 2 may
-   introduce server-assigned ids via a future additive event.
+7. `command_result` correlation uses `request_id`; message storage and
+   deduplication use `message_id`; turn streaming and cancellation use
+   `turn_id`.
+
+## Identifier contract
+
+Every identifier has exactly one purpose and is never encoded inside another:
+
+| Identifier | Meaning |
+|---|---|
+| `session_id` | Stable logical conversation identity. Unchanged across every turn in one chat; changes only when New Chat creates another conversation. |
+| `turn_id` | Unique identity for one prompt execution. Generated before prompt dispatch so the turn can be cancelled before the first backend response. |
+| `message_id` | Unique identity for one logical message. Never reused as a command `request_id`. |
+| `request_id` | Unique correlation identity for one protocol command. Prompt and cancel commands receive different request IDs. |
+
+Identifiers are UUIDs generated with `crypto.randomUUID()` in the frontend.
+They are never built from `Date.now()` and turn/message identity is never
+appended to `session_id`.
+
+## Conversation session vs. server history id
+
+The frontend owns the stable conversation `session_id` (one per chat, reused
+for every turn). The backend independently assigns a server `rtai_session_id`
+per WebSocket connection for history persistence (`GET /api/sessions/...`).
+These are distinct identities with different owners:
+
+- `session_id` — client-owned logical conversation identity, carried on the
+  wire and used for UI correlation.
+- `rtai_session_id` — backend-owned history identity, generated on accept,
+  never derived from the client `session_id`, and used only for the SQLite
+  transcript store.
+
+The two are not interchangeable; the UI never sends `rtai_session_id` and the
+backend never uses the client `session_id` as a history key.
 
 ## Agents
 
@@ -279,6 +311,11 @@ diagnostics).
 UI: finalize bubble, re-enable composer, cancel in-flight tool rows.
 Correlation: turn-scoped.
 
+`done` is the single terminal event for a turn. On cancellation the backend
+emits exactly one `done` with `reason: "cancelled"`; it does not emit a
+separate `cancelled` frame and does not emit a generic handler `error` after a
+successful cancellation.
+
 ### tool_start
 
 | | |
@@ -430,7 +467,10 @@ UI: subtle indicators/diagnostics panel only.
  "session_id": "s", "turn_id": "t"}
 ```
 
-UI: mark generation stopped for that turn; other queued turns unaffected.
+Legacy diagnostic frame. It is **not** the terminal event for a cancelled
+turn. The terminal event for cancellation is `done` with
+`reason: "cancelled"` (see below); the backend emits that `done` exactly once
+and does not emit a separate `cancelled` frame for a cancelled turn.
 
 ### warning / error
 
@@ -480,6 +520,11 @@ authoritative.
 | `select_mode` | `session_id`, `mode_id` | mode switch |
 | `set_thinking` | `session_id`, `level` | one of the standard levels |
 | `permission_response` | `session_id`, `turn_id`, `permission_request_id`, `option_id` | answers a request |
+
+Every command carries a fresh `request_id` (unique, for `command_result`
+correlation). A prompt and its later cancel are **different commands** and
+therefore receive **different** `request_id` values. The cancel reuses the
+target prompt's `session_id` and `turn_id` but never its `request_id`.
 
 ### prompt example
 
@@ -575,8 +620,17 @@ Violations return a normalized `command_result` with `success: false`.
 - Raw attachment content is never persisted in history — only kind, name,
   MIME type, and decoded byte size are stored.
 
-Cancel identifies the exact session and turn; cancelling a non-active turn
-yields a successful no-op acknowledgement.
+Cancel identifies the exact session and turn. The backend cancels only when
+the cancel's `session_id` and `turn_id` match the active turn; a stale or
+mismatched cancel (or a cancel with no turn in flight) is a safe idempotent
+no-op that never cancels a newer/different turn. Every cancel command receives
+one correlated `command_result` using its own `request_id`, and a successful
+cancellation terminates with exactly one `done {reason: "cancelled"}`.
+
+> **Limitation:** only one turn is active per WebSocket. A second prompt while
+> another turn is active is rejected honestly with a failed `command_result`
+> (`"A response is already running"`); it is never silently replaced or
+> cancelled.
 
 ---
 
