@@ -8,6 +8,7 @@ conversion to pinned ACP SDK block constructors using a fake module install.
 from __future__ import annotations
 
 import base64
+import contextlib
 import sys
 import unittest
 from types import ModuleType
@@ -834,10 +835,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
         content = [
             make_prompt_content({"kind": "text", "name": "msg", "text": "hello"})
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_image_converts_to_image_block(self) -> None:
         caps = AcpCapabilityState()
@@ -853,10 +852,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_audio_converts_to_audio_block(self) -> None:
         caps = AcpCapabilityState()
@@ -872,10 +869,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_resource_link_converts_to_resource_link_block(self) -> None:
         session = _make_session()
@@ -889,10 +884,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_embedded_text_converts_correctly(self) -> None:
         caps = AcpCapabilityState()
@@ -908,10 +901,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_embedded_blob_converts_correctly(self) -> None:
         caps = AcpCapabilityState()
@@ -927,10 +918,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_block_order_preserved(self) -> None:
         """Blocks must reach the SDK in their original order."""
@@ -957,10 +946,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_unsupported_block_rejected_before_prompt_call(self) -> None:
         """A block whose kind is not advertised must raise before any SDK call."""
@@ -991,10 +978,8 @@ class AcpBlockConversionTests(unittest.IsolatedAsyncioTestCase):
         content = [
             make_prompt_content({"kind": "text", "name": "msg", "text": "hello"})
         ]
-        try:
+        with contextlib.suppress(AttributeError):
             await session.submit_prompt_content(content)
-        except AttributeError:
-            pass
 
     async def test_no_real_acp_process_started(self) -> None:
         """The fake acp module means no real SDK functions are called."""
