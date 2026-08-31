@@ -57,7 +57,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     <>
       <aside
         id="app-sidebar"
-        className={`w-[clamp(14rem,18vw,18rem)] bg-sidebar text-sidebar-foreground border-r border-border flex flex-col shrink-0 overflow-hidden max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(85vw,20rem)] max-md:transition-transform max-md:duration-200 max-md:shadow-xl ${open ? "max-md:translate-x-0" : "max-md:-translate-x-full"}`}
+        className={`w-[clamp(14rem,18vw,18rem)] bg-sidebar text-sidebar-foreground border-r border-border flex flex-col shrink-0 overflow-hidden max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(85vw,20rem)] max-md:transition-[transform,visibility] max-md:duration-200 motion-reduce:transition-none max-md:shadow-xl ${
+          open
+            ? "max-md:translate-x-0 max-md:visible"
+            : "max-md:-translate-x-full max-md:invisible"
+        }`}
       >
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
@@ -65,7 +69,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <button
           type="button"
           onClick={toggleTheme}
-          className="flex items-center justify-center w-8 h-8 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover"
+          className="flex items-center justify-center w-8 h-8 max-md:h-11 max-md:w-11 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover"
           title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
         >
           {theme === "dark" ? (
@@ -103,10 +107,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       {/* Footer */}
       <div className="flex items-center justify-center gap-2 p-4 border-t border-border shrink-0">
-        <button type="button" className="flex items-center justify-center w-8 h-8 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover" title="Reconnect" onClick={handleFolderSubmit}>
+        <button type="button" className="flex items-center justify-center w-8 h-8 max-md:h-11 max-md:w-11 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover" title="Reconnect" onClick={handleFolderSubmit}>
           <RefreshCw className="w-4 h-4" />
         </button>
-        <button type="button" className="flex items-center justify-center w-8 h-8 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover" title="New Session" onClick={handleNewSession}>
+        <button type="button" className="flex items-center justify-center w-8 h-8 max-md:h-11 max-md:w-11 p-0 border-none rounded-lg bg-transparent text-inherit cursor-pointer transition-colors hover:bg-interactive-hover" title="New Session" onClick={handleNewSession}>
           <Plus className="w-4 h-4" />
         </button>
       </div>

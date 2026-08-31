@@ -64,7 +64,12 @@ frontend/src/styles/
 ## Application Shell Contract
 
 The application shell is a **fluid, height-constrained layout** that must never overflow the
-viewport and must adapt from a fixed sidebar (desktop) to an off-canvas drawer (mobile).
+viewport and must adapt from a fluid sidebar column (desktop) to an off-canvas drawer (mobile).
+
+> **Canonical source.** Exact shell behaviour, measurements, breakpoint ownership and the
+> acceptance checklist are defined in `docs/FRONTEND_UI_SPEC.md` (Section 1). This section
+> records only the styling conventions behind them. If the two disagree, the spec wins — do
+> not restate or reinterpret its rules here.
 
 ### Height / shrink chain (desktop ⇒ mobile continuity)
 
@@ -74,7 +79,7 @@ single scrolling region (the thread Viewport) gets the remaining space:
 ```
 #root (height:100%; overflow:hidden)        [base.css]
   └─ App shell <div>      flex h-dvh min-h-0 w-full min-w-0 overflow-hidden
-       ├─ <Sidebar/>      w-[clamp(14rem,18vw,18rem)]
+       ├─ <Sidebar/>      w-[clamp(14rem,18vw,18rem)]  (fluid; no resize handle this milestone)
        └─ <main>          flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden
             └─ ChatScreen <div>   flex min-h-0 min-w-0 flex-1 flex-col
                  └─ ThreadPrimitive.Root  flex min-h-0 min-w-0 w-full flex-1 flex-col
@@ -93,33 +98,46 @@ single scrolling region (the thread Viewport) gets the remaining space:
 
 There must be **exactly one** of each. The Composer lives inside `ViewportFooter`.
 
-### Shared fluid gutter (no page gutter on the Composer)
+### Shared content column (48rem cap)
 
-Wrap the message list and the footer content in explicit gutter `<div>`s. Do **not** rely on
-`ThreadPrimitive.Messages` forwarding `className`:
+The empty state, the message-list wrapper and the **inner** wrapper of `ViewportFooter` all
+use one shared column so their left and right edges line up. The exact formula lives in the
+spec (Section 1) and is exported as a single constant — import it rather than retyping the
+utilities, so the three call sites cannot drift apart:
 
+```tsx
+import { SHARED_CONTENT_COLUMN } from "../lib/shellLayout";
+
+// message list / footer inner wrapper
+<div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
 ```
-w-full min-w-0 px-[clamp(1rem,3vw,3rem)]
-```
 
-The Composer card itself owns **no** page gutter — it sits inside the footer gutter wrapper and
-uses only `w-full min-w-0`. Never wrap the composer in `max-w-3xl` / `max-w-4xl` / `max-w-5xl` or
+Do **not** rely on `ThreadPrimitive.Messages` forwarding `className`.
+
+The **outer** `ViewportFooter` keeps its own locked full-width classes so its background spans
+the viewport while sticky. The Composer card itself owns **no** page gutter and adds no second
+48rem cap of its own. Never wrap shell content in `max-w-3xl` / `max-w-4xl` / `max-w-5xl` or
 `w-[calc(100%-2rem)]`.
 
 Empty state (inside the Viewport, when the thread is empty):
 
-```
-flex min-h-0 flex-1 flex-col items-center justify-center px-[clamp(1rem,3vw,3rem)] text-center
+```tsx
+<div className={`${SHARED_CONTENT_COLUMN} flex min-h-0 flex-1 flex-col items-center justify-center text-center`}>
 ```
 
 ### Responsive sidebar / drawer
 
 - Breakpoint: the Tailwind default `md` (768px). Above `md` the sidebar is a static column;
-  below `md` it becomes an off-canvas drawer.
-- Desktop width: `w-[clamp(14rem,18vw,18rem)]`.
+  below `md` it becomes an off-canvas drawer. `lg` (1024px) is only the content-column gutter
+  breakpoint — it is never a sidebar or drawer breakpoint.
+- Desktop width: `w-[clamp(14rem,18vw,18rem)]`. Fluid. There is no resize handle in this
+  milestone; user resizing is tracked as *Application Shell 1B* in the tracker.
 - Mobile drawer: `max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40
-  max-md:w-[min(85vw,20rem)] max-md:transition-transform max-md:duration-200 max-md:shadow-xl`
-  plus `max-md:translate-x-0` when open and `max-md:-translate-x-full` when closed.
+  max-md:w-[min(85vw,20rem)] max-md:transition-[transform,visibility] max-md:duration-200
+  motion-reduce:transition-none max-md:shadow-xl`, plus `max-md:translate-x-0 max-md:visible`
+  when open and `max-md:-translate-x-full max-md:invisible` when closed. `visibility` is part
+  of the transition list so the closed drawer leaves the tab order without losing the slide
+  animation.
 - A backdrop `fixed inset-0 z-30 bg-foreground/50 md:hidden` is rendered only while the drawer is
   open; clicking it (or pressing Escape) closes the drawer and restores focus to the menu button.
 
@@ -129,6 +147,8 @@ flex min-h-0 flex-1 flex-col items-center justify-center px-[clamp(1rem,3vw,3rem
   `aria-controls="app-sidebar"`, and `ref` to the menu button element.
 - The `<aside>` has `id="app-sidebar"`.
 - On close, focus returns to the menu button (no new dependencies).
+- Interactive buttons keep their desktop `h-8 w-8` sizing and add `max-md:h-11 max-md:w-11`,
+  meeting the 44x44px minimum touch target below `md`.
 
 ## Semantic Token Categories
 

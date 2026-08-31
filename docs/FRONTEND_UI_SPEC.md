@@ -19,10 +19,14 @@ differences section below.
 - No CSS Modules / CSS-in-JS / new styling framework.
 - Coding and testing stay separate.
 - If the contract does not define a UI decision, stop and ask instead of guessing.
+- **This document is the canonical source of truth for exact UI behaviour.**
+  `docs/STYLING.md` holds reusable styling conventions and points here for exact
+  shell rules. `docs/VISUAL_MVP_TRACKER.md` tracks progress and links here
+  instead of restating the rules. When the three disagree, this document wins.
 
 ## 1. Active section: Application shell
 
-Status: partly implemented — header height and gutter formula need alignment
+Status: implemented in source — CI build and browser verification pending
 
 OpenChamber files studied:
 | File | Measurement taken from |
@@ -39,48 +43,72 @@ RTAI files affected:
 | File | Role |
 |---|---|
 | `frontend/src/App.tsx` | Shell root: `flex h-dvh min-h-0 w-full min-w-0 overflow-hidden` |
-| `frontend/src/components/Sidebar.tsx` | Left navigation (desktop fixed + mobile off-canvas drawer) |
+| `frontend/src/components/Sidebar.tsx` | Left navigation (desktop fluid column + mobile off-canvas drawer) |
 | `frontend/src/components/ChatPanel.tsx` | Flex main wrapper (`flex-1 min-h-0 min-w-0 flex-col overflow-hidden`) |
 | `frontend/src/components/ChatScreen.tsx` | Header + ThreadPrimitive hierarchy + ViewportFooter |
+| `frontend/src/lib/shellLayout.ts` | `SHARED_CONTENT_COLUMN` — single source for the column formula |
 
 Locked rules:
 - **Shell height**: `h-dvh` (100dvh), `overflow-hidden`, flex column. No page-level
   scrollbar.
-- **Header height**: `h-12` (48px). Current code uses `h-14` (56px) — must be
-  corrected to `h-12` per OpenChamber measurement at `Header.tsx:1565`.
-- **Sidebar width**: `w-[clamp(14rem,18vw,18rem)]` (224px minimum, 288px maximum).
-  Fixed width — no resize handle (simpler than OpenChamber's resizable 280-500px
-  panel). `shrink-0`, `bg-sidebar`, `border-r border-border`.
-- **Mobile sidebar**: off-canvas drawer triggered by menu button.
+- **Header height**: `h-12` (48px), per OpenChamber measurement at `Header.tsx:1565`.
+- **Sidebar width (desktop, >= 768px)**: `w-[clamp(14rem,18vw,18rem)]`
+  (224px minimum, 288px maximum) — a fluid column that tracks the viewport.
+  `shrink-0`, `bg-sidebar`, `border-r border-border`.
+  **No resize handle in this milestone.** User resizing is a pending follow-up
+  tracked as *Application Shell 1B* in `docs/VISUAL_MVP_TRACKER.md`. It is
+  deferred, not rejected, and must not be implemented ad hoc — it needs its own
+  specification update here before any code is written.
+- **Mobile sidebar (< 768px)**: off-canvas drawer triggered by menu button.
   `max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(85vw,20rem)]`.
-  Uses `inert` or equivalent when closed (not tabbable). Escape key closes and
-  restores focus to menu button. Backdrop is not a keyboard tab stop.
+  Uses `inert` or equivalent when closed (not tabbable) — implemented with
+  `max-md:invisible` while closed, which removes the whole subtree from the tab
+  order and from the accessibility tree. `visibility` is part of the transition
+  (`max-md:transition-[transform,visibility]`) so the slide-out still animates.
+  Escape key closes and restores focus to menu button. Backdrop is not a
+  keyboard tab stop.
 - **Main content**: `flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden`.
 - **Scroll ownership**: exactly one scrolling region — `ThreadPrimitive.Viewport`
   (`overflow-y-auto`). No other ancestor sets overflow other than `overflow-hidden`.
   `ViewportFooter` is a sibling of the messages wrapper inside `Viewport`.
-- **Mobile breakpoint**: `@media (max-width: 1024px)` for layout adaptations.
-  Menu button visibility uses `md:hidden` (768px) — retained for existing pattern.
-- **Message/composer column formula** (from `typography.css:83-125`):
+- **Breakpoints**: the sidebar drawer and the menu button switch at the Tailwind
+  default `md` (768px); the menu button uses `md:hidden`. `lg` (1024px) is used
+  **only** for the shared content-column gutter switch below. 1024px is never a
+  sidebar or drawer breakpoint.
+- **Shared content column** (from `typography.css:83-125`):
   ```
   width: min(100%, 48rem);
   margin-inline: auto;
   padding-inline: clamp(0.75rem, 2.5vw, 1rem)         (< 1024px)
   padding-inline: clamp(1rem,   2.5vw, 1.5rem)        (>= 1024px)
   ```
-- **Accessibility**: all interactive buttons ≥ 44x44px touch target on mobile;
-  focus-visible ring 2px solid ring color with 2px offset; `prefers-reduced-motion`
-  suppresses drawer transitions and busy animations.
+  Tailwind form (exported as `SHARED_CONTENT_COLUMN` from
+  `frontend/src/lib/shellLayout.ts`):
+  ```
+  w-[min(100%,48rem)] mx-auto px-[clamp(0.75rem,2.5vw,1rem)] lg:px-[clamp(1rem,2.5vw,1.5rem)]
+  ```
+  Applied to exactly three wrappers so their edges line up:
+    1. the empty state,
+    2. the message-list wrapper,
+    3. the **inner** wrapper of `ViewportFooter` (the one holding StatusBar and
+       Composer).
+  The **outer** `ViewportFooter` keeps its own full-width locked classes so its
+  background still spans the viewport while sticky. The Composer adds no second
+  48rem cap of its own.
+- **Accessibility**: all interactive buttons ≥ 44x44px touch target on mobile
+  (`max-md:h-11 max-md:w-11` layered on the desktop `h-8 w-8`); focus-visible
+  ring 2px solid ring color with 2px offset; `prefers-reduced-motion` suppresses
+  drawer transitions and busy animations.
 
 RTAI exceptions:
-- Sidebar is fixed-width (no resize handle); OpenChamber sidebar is resizable
-  280-500px via pointer events.
+- Sidebar is a fluid `clamp()` column with no resize handle in this milestone.
+  OpenChamber's sidebar is user-resizable 280-500px. That behaviour is tracked
+  as *Application Shell 1B* and must be specified in this section before it is
+  built.
 - RTAI uses `assistant-ui` ThreadPrimitive/Viewport/ViewportFooter/Composer
   primitives; OpenChamber uses its own message list and input.
 - RTAI theme tokens live in `frontend/src/styles/themes.css` with Tailwind v4
   `@theme inline` — no raw `var(--...)` in className strings.
-- Header currently uses `h-14` (56px) instead of the measured `h-12` (48px);
-  this must be corrected as part of the shell build.
 
 Acceptance checklist:
 - [ ] App fills entire viewport with no page-level scrollbar.
@@ -88,11 +116,12 @@ Acceptance checklist:
 - [ ] Flex shrink chain: `min-h-0` / `min-w-0` on every ancestor from shell to viewport.
 - [ ] Header height is `h-12` (48px).
 - [ ] Desktop sidebar visible at `clamp(14rem,18vw,18rem)` width, never compresses.
-- [ ] Mobile (< 1024px): sidebar hidden behind off-canvas drawer; menu button opens it.
+- [ ] Mobile (< 768px): sidebar hidden behind off-canvas drawer; menu button opens it.
 - [ ] Drawer uses `inert` or equivalent when closed; Escape closes and restores focus.
 - [ ] Backdrop is not a keyboard tab stop.
-- [ ] Message column capped at 48rem with centered gutters; gutters follow the
-  clamp formula at both breakpoint ranges.
+- [ ] Empty state, message column and footer inner wrapper all share the 48rem
+  centered column; gutters follow the clamp formula at both breakpoint ranges.
+- [ ] Outer `ViewportFooter` stays full width.
 - [ ] No layout break at 320px, 375px, 768px, 1024px, 1280px, 1440px, 1920px, 2560px.
 
 ## 2. Active section: Composer and capability controls
@@ -115,10 +144,10 @@ RTAI files affected:
 
 Locked rules:
 - **Position**: inside `ThreadPrimitive.ViewportFooter` (sticky `bottom-0 z-10`).
-  Composer sits inside `.chat-input-column` wrapper — same 48rem cap and same
+  Composer sits inside the shared content column wrapper — same 48rem cap and same
   gutters as the message column for visual alignment.
-- **Width**: `max-w-[48rem] mx-auto` within ViewportFooter, matching the message
-  column constraint from `typography.css:93-97`.
+- **Width**: inherits the shared content column from Section 1. The Composer must
+  not add a second, independent 48rem cap.
 - **Input**: auto-grow from 1 row (~36px) to 200px max via `scrollHeight` clamp.
   `overflow-y-auto` when exceeding max. Placeholder: "Ask anything…".
 - **Left controls** (footer left-group): attachment button (when available),

@@ -7,6 +7,7 @@ import { useChatStore } from "../state/chatStore";
 import { MessageItem } from "./Message";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
+import { SHARED_CONTENT_COLUMN } from "../lib/shellLayout";
 
 export interface ChatScreenProps {
   drawerOpen: boolean;
@@ -49,7 +50,7 @@ export function ChatScreen({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header */}
-      <header className="flex h-14 shrink-0 items-center border-b border-interactive bg-surface-background px-4">
+      <header className="flex h-12 shrink-0 items-center border-b border-interactive bg-surface-background px-4">
         <button
           type="button"
           ref={menuButtonRef}
@@ -57,7 +58,7 @@ export function ChatScreen({
           aria-expanded={drawerOpen}
           aria-controls="app-sidebar"
           aria-label="Open navigation menu"
-          className="md:hidden mr-2 flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-transparent text-foreground cursor-pointer transition-colors hover:bg-interactive-hover"
+          className="md:hidden mr-2 flex items-center justify-center w-8 h-8 max-md:h-11 max-md:w-11 rounded-lg border border-border bg-transparent text-foreground cursor-pointer transition-colors hover:bg-interactive-hover"
         >
           <Menu className="w-4 h-4" />
         </button>
@@ -80,7 +81,9 @@ export function ChatScreen({
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
         >
           <AuiIf condition={(s) => s.thread.isEmpty}>
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-[clamp(1rem,3vw,3rem)] text-center">
+            <div
+              className={`${SHARED_CONTENT_COLUMN} flex min-h-0 flex-1 flex-col items-center justify-center text-center`}
+            >
               <h1 className="text-2xl font-normal text-foreground">
                 What are we working on?
               </h1>
@@ -90,7 +93,7 @@ export function ChatScreen({
             </div>
           </AuiIf>
 
-          <div className="w-full min-w-0 px-[clamp(1rem,3vw,3rem)]">
+          <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
             <ThreadPrimitive.Messages>
               {({ message }) => <MessageItem message={message} />}
             </ThreadPrimitive.Messages>
@@ -100,7 +103,7 @@ export function ChatScreen({
             className="sticky bottom-0 z-10 w-full min-w-0 bg-background"
             data-testid="thread-viewport-footer"
           >
-            <div className="w-full min-w-0 px-[clamp(1rem,3vw,3rem)]">
+            <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
               {/* Persistent status bar */}
               <StatusBar />
 
