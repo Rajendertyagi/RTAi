@@ -9,65 +9,55 @@ phase status changes.
 | Status | Meaning |
 |---|---|
 | **Planned** | Feature is on the roadmap but no work has begun |
-| **Specified** | Design specification exists in `docs/FRONTEND_UI_SPEC.md` |
-| **Implemented in source** | Code exists in `frontend/src/` and matches the spec |
-| **CI build verified** | `npm run build` passes in GitHub Actions |
+| **Specified** | Design specification exists in docs/FRONTEND_UI_SPEC.md |
+| **Implemented in source** | Code exists in frontend/src/ and matches the spec |
+| **CI build verified** | npm run build passes in GitHub Actions |
 | **Visually verified** | Screenshot/artifact inspection confirms correct rendering |
 | **Blocked** | Waiting on external dependency (backend API, design decision, etc.) |
 | **Deferred** | Intentionally postponed to a later milestone |
 
 ## Current baseline
 
-- **Branch**: `feature/react-ui-foundation`
-- **Starting SHA**: `88d47c3`
-- **Specification commit**: `d3ff517` â€” `docs(ui): align specification with OpenChamber reference`
-- **Current CI state**: Green for `d3ff517` (documentation only)
-- **Known Playwright status**: No E2E tests exist yet; Playwright repair deferred to separate task
-- **Recovery stash**: `stash@{0}: recovery: attachment and shell changes before branch repair` â€” untouched
+- Branch: feature/react-ui-foundation
+- Starting SHA: bdf21d0
+- Build contract commit: HEAD - this commit replaces the broad spec with an
+  incremental build contract covering only the active shell + composer sections
+- Current CI state: Green for documentation-only commits
+- Known Playwright status: No E2E tests exist yet; Playwright repair deferred
+- Recovery stash: stash@{0}: recovery: attachment and shell changes before branch repair - untouched
 
-## Phase table
+## Build phases
 
 | # | Phase | Scope | Status | Source SHA | CI run | Visual evidence | Remaining work |
 |---|---|---|---|---|---|---|---|
-| 1 | Design specification | Rewritten spec aligned to OpenChamber measurements; all open decisions resolved; deferred features tracked | Specified | `d3ff517` | N/A (doc only) | N/A | None |
-| 2 | Fluid application shell | `h-dvh` shell, flex shrink chain, no page overflow | Planned | â€” | â€” | â€” | Implement shell per spec section 4 |
-| 3 | Left sidebar | Desktop static column + mobile off-canvas drawer with `inert` focus exclusion | Planned | â€” | â€” | â€” | Implement drawer per spec section 7 |
-| 4 | Thread / empty state | Empty centered state; message alignment; scroll-to-bottom button | Planned | â€” | â€” | â€” | Implement per spec sections 8-9 |
-| 5 | Composer | Input auto-grow; send/stop toggle; CapabilitySelectors footer layout | Planned | â€” | â€” | â€” | Implement per spec section 9 |
-| 6 | Message presentation | User bubbles; assistant cards; ToolCard; StatusBar; inline error feedback | Planned | â€” | â€” | â€” | Implement per spec section 8 |
-| 7 | Right sidebar / rail | Target defined in spec; no implementation yet | Deferred | â€” | â€” | â€” | Requires context surface registry backend |
-| 8 | Responsive polish | Verify all breakpoints; no layout break at any width | Planned | â€” | â€” | â€” | Test at 320/375/768/1024/1280/1440/1920/2560px |
-| 9 | Accessibility | Focus order, ARIA labels, reduced motion, `inert` drawer, 44px touch targets | Planned | â€” | â€” | â€” | Implement per spec section 11 |
-| 10 | Visual verification | Screenshots at every breakpoint/state from acceptance checklist | Planned | â€” | â€” | â€” | Capture before each milestone merge |
-| 11 | Replacement tests | Update existing component tests for new shell/components | Planned | â€” | â€” | â€” | Tests in `tests/frontend/` must match new structure |
+| 1 | Build contract | Incremental spec covering active shell + composer only; future sections as placeholders | Specified | HEAD | N/A (doc only) | N/A | None |
+| 2 | Application shell | h-dvh shell, flex shrink chain, header h-12 (48px), sidebar desktop+mobile drawer, scroll ownership, 48rem column formula | Planned | — | — | — | Correct header height; verify gutter formula; finalize drawer inert contract |
+| 3 | Composer and capability controls | Input auto-grow; send/stop toggle; footer left-group (capability selectors only); runtime-driven state; no hardcoded labels | Planned | — | — | — | Restructure footer layout; verify send/stop cycle; test disconnected state |
+| 4 | Messages | User bubbles; assistant cards; ToolCard; avatars; scroll-to-bottom button | Deferred | — | — | — | Requires OpenChamber message rendering study per spec section 3 |
+| 5 | Sidebar and session history | Session list; new session; folder selector polish | Deferred | — | — | — | Requires OpenChamber sidebar behavior study per spec section 4 |
+| 6 | Header/top bar polish | Session title editing; navigation controls | Deferred | — | — | — | Requires OpenChamber header study per spec section 5 |
+| 7 | Right rail / context panel | 44px rail; 380-1400px panel; drag-reorderable icons | Deferred | — | — | — | Requires backend surface registry (spec section 6) |
+| 8 | Message actions | Timestamps; context menu; export; toasts | Deferred | — | — | — | Per spec section 7 |
+| 9 | Responsive polish | Verify no layout break at 320/375/768/1024/1280/1440/1920/2560px | Planned | — | — | — | Test all breakpoints |
+| 10 | Accessibility polish | Focus order, ARIA labels, reduced motion, inert drawer, 44px touch targets | Planned | — | — | — | Audit per spec sections 1-2 |
+| 11 | Replacement tests | Update component tests for new shell/composer structure | Planned | — | — | — | Tests in tests/frontend/ must match new structure |
+| 12 | Visual verification | Screenshots at every breakpoint/state from acceptance checklist | Planned | — | — | — | Capture before each milestone merge |
 
-## Future interaction milestones
-
-These capabilities were deferred from the current shell/composer milestone and
-are tracked separately. They are intentionally postponed, not rejected.
-
-| Future capability | Planned milestone | Current status |
-|---|---|---|
-| Message timestamps | Message polish | Deferred â€” not part of current shell/composer work |
-| Message context menu | Message actions | Deferred |
-| Conversation export | History and portability | Deferred; requires export contract |
-| Toast / notification system | Shared application feedback | Deferred; use inline errors in current milestone |
-| Right-rail icon actions | Context-panel shell | Planned when right-panel content providers exist |
-| Drag-reordering right-rail icons | Context-panel customization | Deferred until fixed rail behavior is stable |
-
+## Handoff log
 | Date | SHA | Agent/task | Area | Result | CI | Visual status | Next action |
 |---|---|---|---|---|---|---|---|
-| 2026-08-31 | `88d47c3` | Agnes (spec writer) | Design specification | Created initial `docs/FRONTEND_UI_SPEC.md` and `docs/VISUAL_MVP_TRACKER.md` | N/A | N/A | â€” |
-| 2026-08-31 | `ca17f8e` | Agnes (spec finalizer) | Locked contract + decision resolution | Added section 0 locked contract; resolved 5 open decisions; clarified right panel dimensions | N/A | N/A | Spec rewrite phase |
-| 2026-08-31 | `d3ff517` | Agnes (spec rewriter) | Full specification rewrite | Rewrote spec to 467 lines; corrected header height (48px), composer width (48rem cap), mobile breakpoint (1024px); fixed accessibility contract | N/A | N/A | Restore deferred features to roadmap |
-| 2026-08-31 | `d3ff517` | Agnes (roadmap restorer) | Deferred feature restoration | Restored 6 future interaction milestones to tracker; added right-rail boundary note; clarified current inline feedback behavior; split "out of scope" into deferred vs permanently excluded | N/A | N/A | Begin shell milestone implementation |
+| 2026-08-31 | 88d47c3 | Agnes (spec writer) | Design specification | Created initial docs/FRONTEND_UI_SPEC.md and docs/VISUAL_MVP_TRACKER.md | N/A | N/A | — |
+| 2026-08-31 | ca17f8e | Agnes (spec finalizer) | Locked contract + decision resolution | Added section 0 locked contract; resolved 5 open decisions; clarified right panel dimensions | N/A | N/A | Spec rewrite phase |
+| 2026-08-31 | d3ff517 | Agnes (spec rewriter) | Full specification rewrite | Rewrote spec to 467 lines; corrected header height (48px), composer width (48rem cap), mobile breakpoint (1024px); fixed accessibility contract | N/A | N/A | Restore deferred features to roadmap |
+| 2026-08-31 | bdf21d0 | Agnes (roadmap restorer) | Deferred feature restoration | Restored 6 future interaction milestones to tracker; added right-rail boundary note; clarified current inline feedback behavior; split out-of-scope into deferred vs permanently excluded | N/A | N/A | Begin shell milestone implementation |
+| 2026-08-31 | bdf21d0 | Agnes (contract writer) | Incremental build contract | Replaced broad 482-line spec with focused build contract; active sections = shell + composer; future sections as placeholders; no features deleted | N/A | N/A | Begin shell milestone implementation |
 
 ## Permanent agent rule
 
 Every frontend agent must:
 
-1. Read `docs/FRONTEND_UI_SPEC.md`, `docs/STYLING.md`, and this tracker before touching any frontend source.
-2. Follow the locked specification -- do not redesign during implementation.
+1. Read docs/FRONTEND_UI_SPEC.md (the build contract), docs/STYLING.md, and this tracker before touching any frontend source.
+2. Follow the locked specification for active sections — do not redesign during implementation.
 3. Update this tracker in the same commit when any phase status changes.
-4. Never mark a phase "Visually verified" without screenshot evidence or artifact inspection.
+4. Never mark a phase Visually verified without screenshot evidence or artifact inspection.
 5. If a spec conflict is discovered, pause and report to the maintainers before proceeding.
