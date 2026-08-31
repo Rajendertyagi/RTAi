@@ -405,9 +405,7 @@ class TestPartEventMapping(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "part_start", "part_id": "p1", "part_type": "text"},
                 {"type": "part_delta", "part_id": "p1", "text": "Hel"},
-                {"type": "delta", "text": "Hel"},
                 {"type": "part_delta", "part_id": "p1", "text": "lo"},
-                {"type": "delta", "text": "lo"},
                 {"type": "part_done", "part_id": "p1"},
                 {"type": "done"},
             ],
@@ -433,7 +431,6 @@ class TestPartEventMapping(unittest.IsolatedAsyncioTestCase):
                 {"type": "part_done", "part_id": "r1"},
                 {"type": "part_start", "part_id": "t1", "part_type": "text"},
                 {"type": "part_delta", "part_id": "t1", "text": "reply"},
-                {"type": "delta", "text": "reply"},
                 {"type": "part_done", "part_id": "t1"},
                 {"type": "done"},
             ],
@@ -472,7 +469,6 @@ class TestPartEventMapping(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "part_start", "part_id": "t1", "part_type": "text"},
                 {"type": "part_delta", "part_id": "t1", "text": "hi"},
-                {"type": "delta", "text": "hi"},
                 {"type": "part_done", "part_id": "t1"},
                 {
                     "type": "tool_start",
@@ -503,7 +499,6 @@ class TestPartEventMapping(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "part_start", "part_id": "t1", "part_type": "text"},
                 {"type": "part_delta", "part_id": "t1", "text": "hi"},
-                {"type": "delta", "text": "hi"},
                 {"type": "part_done", "part_id": "t1"},
                 {"type": "done"},
             ],
@@ -526,7 +521,6 @@ class TestPartEventMapping(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "part_start", "part_id": "t1", "part_type": "text"},
                 {"type": "part_delta", "part_id": "t1", "text": "Hello"},
-                {"type": "delta", "text": "Hello"},
                 {"type": "part_done", "part_id": "t1"},
                 {"type": "done"},
             ],
@@ -555,7 +549,6 @@ class TestPartEventMapping(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "part_start", "part_id": "t1", "part_type": "text"},
                 {"type": "part_delta", "part_id": "t1", "text": "hi"},
-                {"type": "delta", "text": "hi"},
                 {"type": "part_done", "part_id": "t1"},
                 {"type": "error", "message": "boom"},
             ],

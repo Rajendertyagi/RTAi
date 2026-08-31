@@ -864,10 +864,8 @@ class OpenCodeServerAdapter(AgentAdapter):
     async def _emit_content_part(self, part: dict[str, Any], delta: Any) -> None:
         """Stream a server text/reasoning part as part_start / part_delta events.
 
-        Mirrors the ACP adapter: a new part opens whenever the part id or kind
-        changes, so thinking and reply text become separate parts in true
-        chronological order. The legacy ``delta`` event is kept for text parts
-        until the frontend moves fully to parts.
+        A new part opens whenever the part id or kind changes, so thinking
+        and reply text become separate parts in true chronological order.
         """
         if self._emit is None:
             return
@@ -911,9 +909,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             await self._emit(
                 {"type": "part_delta", "part_id": part_key, "text": chunk}
             )
-        # Legacy path: only the reply belongs in the concatenated text blob.
-        if part_type == "text":
-            await self._emit({"type": "delta", "text": chunk})
 
     async def _emit_tool_event(self, part: dict[str, Any]) -> None:
         """Map an OpenCode server tool part to Protocol v1 tool events.

@@ -634,11 +634,6 @@ class AcpSession(AgentAdapter):
         if not text:
             return
         await self._send({"type": "part_delta", "part_id": self._open_part_id, "text": text})
-        # Legacy path: the UI still renders one concatenated text blob until
-        # the frontend moves to parts. Only the reply belongs in it - thinking
-        # was never part of it before, so it stays out.
-        if kind == "text":
-            await self._send({"type": "delta", "text": text})
 
     async def _emit_tool_event(self, dumped: dict[str, Any]) -> None:
         """Map ACP tool-call session updates to Protocol v1 tool events.
