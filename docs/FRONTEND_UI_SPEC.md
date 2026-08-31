@@ -23,12 +23,31 @@ Locked RTAI principles this specification must preserve:
 - Bounded-fluid layout: the shell fills the viewport; the chat content rail is a
   centered fluid column with a documented maximum.
 
+## 0. Locked implementation contract
+
+These rules are **non-negotiable**. No agent may redesign, bypass, or replace them
+during implementation. Any deviation requires an explicit change to this document first.
+
+| Rule | Locked value |
+|---|---|
+| Shell height | Full viewport: `h-dvh` (`min-h-0 w-full overflow-hidden`) |
+| Header height | `h-14` (56px), `shrink-0`, `flex items-center justify-between` |
+| Left sidebar width | `w-[clamp(14rem,18vw,18rem)]` — desktop static column |
+| Left sidebar mobile (< 768px) | Off-canvas drawer: `max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(85vw,20rem)]` |
+| Assistant prose column | `max-w-[48rem]` (768px) centered with `mx-auto`; `px-[clamp(1rem,3vw,3rem)]` gutters |
+| Composer input column | `w-full`, no max-width cap; sits inside ViewportFooter at `sticky bottom-0 z-10` |
+| Tool / code overflow | May exceed prose column width; must never create page-level horizontal scroll — use `overflow-x-auto` within the card |
+| Scroll ownership | Exactly one scrolling region: `ThreadPrimitive.Viewport` (`overflow-y-auto`). No other ancestor may scroll. |
+| Thread structure | Exactly one `ThreadPrimitive.Root`, one `Viewport`, one `ViewportFooter`, one Composer |
+| Styling discipline | Tailwind v4 semantic utilities only; no raw `var(--...)` in className; no `@apply`; no CSS Modules |
+| Capability controls | Driven entirely by runtime events from the backend; no hardcoded agent/model/mode/thinking lists |
+
 ## 2. Reference evidence
 
 | Area | OpenChamber source | Observed behavior | RTAI decision | Reason |
 |---|---|---|---|---|
 | Application shell height | `packages/ui/src/components/layout/MainLayout.tsx:102` | `h-[100dvh]`, overflow hidden, no page scroll | Use `h-dvh` with `overflow-hidden` on root div | Matches existing STYLING.md contract; dvh handles mobile URL-bar collapse |
-| Left sidebar width | `packages/ui/src/components/layout/Sidebar.tsx:7-9` | `SIDEBAR_CONTENT_WIDTH = 280`, min 280, max 500, resizable via pointer events | Fixed `w-[clamp(14rem,18vw,18rem)]` (224px-288px) | RTAI has no need for resizable sidebar (Phase 5 session history TBD); clamp gives proportional desktop width |
+| Left sidebar width | `packages/ui/src/components/layout/Sidebar.tsx:7-9` | `SIDEBAR_CONTENT_WIDTH = 280`, min 280, max 500, resizable via pointer events | Fixed `w-[clamp(14rem,18vw,18rem)]` (224px-288px) | RTAI has no need for resizable sidebar; clamp gives proportional desktop width without runtime resize logic |
 | Left sidebar mobile | `packages/ui/src/components/layout/Sidebar.tsx:60-61` | Returns `null` on mobile; mobile uses separate shell | Drawer at `max-md:fixed` with backdrop, as already in Sidebar.tsx | Matches existing implementation; preserves current behavior |
 | Header height | `packages/ui/src/components/layout/Header.tsx:1565` | `h-12` (48px) on desktop; macOS 26 uses `h-12`, macOS 15 and below `h-14` | `h-14` (56px) fixed | Simpler for RTAI; matches existing ChatScreen header |
 | Header alignment | `packages/ui/src/components/layout/Header.tsx:1565` | `flex items-center`, session title left, controls right | Keep flex row, `items-center`, `justify-between` | Current pattern works |
@@ -63,8 +82,9 @@ Locked RTAI principles this specification must preserve:
                            ├── Empty state (when thread.isEmpty)
                            │    flex min-h-0 flex-1 flex-col items-center justify-center
                            │    px-[clamp(1rem,3vw,3rem)] text-center
-                           ├── Messages wrapper
-                           │    w-full min-w-0 px-[clamp(1rem,3vw,3rem)]
+                           ├── Messages wrapper (bounded fluid column)
+                           │    w-full min-w-0
+                           │    message-column: max-w-[48rem] mx-auto px-[clamp(1rem,3vw,3rem)]
                            │    <ThreadPrimitive.Messages>
                            └── ThreadPrimitive.ViewportFooter  sticky bottom-0 z-10 w-full min-w-0 bg-background
                                 ├── <StatusBar />  h-8 flex items-center gap-2 border-t
@@ -149,34 +169,51 @@ RTAI uses these exact breakpoints; no custom breakpoints are defined.
 | Right sidebar width | N/A (deferred) | N/A | N/A | N/A |
 | Right rail width | N/A (deferred) | N/A | N/A | N/A |
 | Main min width | 0 (sidebar drawer covers) | 0 (fluid) | 0 (fluid) | 0 (fluid) |
-| Content-rail formula | `w-full` with `px-[clamp(1rem,3vw,3rem)]` gutters | `w-full` with `px-[clamp(1rem,3vw,3rem)]` gutters | `w-full` with `px-[clamp(1rem,3vw,3rem)]` gutters | `w-full` with `px-[clamp(1rem,3vw,3rem)]` gutters |
+| Content-rail formula | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` | Same dual-column pattern | Same dual-column pattern | Same dual-column pattern |
 | Horizontal gutters | min 1rem, scales to 3rem at wide | clamp(1rem, 3vw, 3rem) | clamp(1rem, 3vw, 3rem) | clamp(1rem, 3vw, 3rem) |
 | Composer min height | 3.75rem (single row textarea + footer) | 3.75rem | 3.75rem | 3.75rem |
 | Composer default height | 5rem (before auto-grow) | 5rem | 5rem | 5rem |
 | Composer max height | 200px input + 2.5rem footer | 200px input + 2.5rem footer | 200px input + 2.5rem footer | 200px input + 2.5rem footer |
 | Drawer width (mobile) | min(85vw, 20rem) | N/A | N/A | N/A |
-| Content-rail effective max text width | ~calc(100% - 4rem) at 320px; ~calc(100% - 12rem) at 1920px | Unbounded by max-width; readable by gutter clamp | Unbounded by max-width; readable by gutter clamp | Unbounded by max-width; readable by gutter clamp |
+| Message-column max width | `max-w-[48rem]` (768px) centered with gutters | `max-w-[48rem]` centered with gutters | `max-w-[48rem]` centered with gutters | `max-w-[48rem]` centered with gutters |
+| Composer width | `w-full` (fills entire rail, no cap) | `w-full` (fills entire rail, no cap) | `w-full` (fills entire rail, no cap) | `w-full` (fills entire rail, no cap) |
 
-### Content-rail formula (bounded-fluid)
+### Content-rail formula (dual-column: bounded message + fluid composer)
 
-The chat content rail does **not** have a hard `max-w-3xl`/`max-w-4xl`/`max-w-5xl`.
-It uses a **gutter-clamped full-width** approach:
+The chat content area uses a **dual-column** layout inspired by OpenChamber's
+`.chat-column` / `.chat-input-column` pattern:
+
+- **Message column**: bounded fluid column, `max-w-[48rem]` (768px) centered with
+  `mx-auto`, padded with `px-[clamp(1rem,3vw,3rem)]`. This ensures prose readability
+  at all viewport widths while allowing code blocks and tool cards to exceed the
+  text measure and scroll horizontally.
+- **Composer**: full-width (`w-full`), no max-width cap. The composer benefits from
+  wide screens for the capability controls bar and provides maximum typing space.
 
 ```
-rail-width  = 100% of available main-area width
-gutter      = clamp(1rem, 3vw, 3rem)  per side
-text-content = rail-width - 2 * gutter
+message-column:  max-w-[48rem] mx-auto, px-[clamp(1rem,3vw,3rem)]
+  -> at 320px:   ~288px content (max-w constrains to viewport)
+  -> at 1024px:  ~768px content (48rem cap active)
+  -> at 1920px:  ~768px content (48rem cap active)
+  -> at 2560px:  ~768px content (48rem cap active)
+
+composer:        w-full, no max-width
+  -> at 320px:   ~288px (gutter-clamped)
+  -> at 1024px:  ~730px (sidebar 294px removed from main)
+  -> at 1920px:  ~1584px (sidebar 288px removed from main)
+  -> at 2560px:  ~2224px (sidebar 288px removed from main)
 ```
 
-At 320px viewport (sidebar collapsed on mobile): gutter = 1rem, text-content = 288px.
-At 1024px: gutter = 3.07rem (~49px), text-content = ~926px.
-At 1920px: gutter = 3rem, text-content = ~1752px.
-
-**Why this value suits chat, code blocks, and capability controls:**
-- Chat prose remains readable at narrow widths (288px minimum) without a hard cap that would waste space on wider screens.
-- Code blocks and tool cards exceed the text measure and scroll horizontally within their container -- this is intentional and matches OpenChamber's `.chat-message-column` pattern.
-- Capability controls in the composer footer use `flex-wrap` and truncate at 10rem per item, so they remain usable at any rail width.
-- The gutter itself is fluid: it tightens on narrow screens for precious content width and expands on wide screens to prevent content from touching the sidebar or screen edge.
+**Why this dual-column approach:**
+- Prose remains at a comfortable ~768px maximum across all desktop widths (optimal
+  reading measure per typographic research).
+- Code blocks and tool cards scroll horizontally within their container -- this is
+  intentional and matches OpenChamber's `.chat-message-column` pattern.
+- The composer benefits from full width: capability controls have room to lay out
+  in a single row, and the input area feels spacious at any viewport size.
+- The gutter itself is fluid: it tightens on narrow screens for precious content
+  width and expands on wide screens to prevent content from touching the sidebar
+  or screen edge.
 
 ### Horizontal gutter formula
 
@@ -185,11 +222,12 @@ padding-inline = clamp(1rem, 3vw, 3rem)
 ```
 
 This is applied to:
-- The messages wrapper inside Viewport
+- The messages wrapper inside Viewport (inside the max-w-[48rem] column)
 - The ViewportFooter inner wrapper (status bar + composer)
 - The empty state container
 
-The composer card itself owns **no** additional page gutter -- it sits inside the footer gutter wrapper and uses `w-full min-w-0`.
+The composer card itself owns **no** additional page gutter -- it sits inside the
+footer gutter wrapper and uses `w-full min-w-0`.
 
 ## 5. Typography system
 
@@ -422,10 +460,12 @@ px-[clamp(1rem,3vw,3rem)] text-center
 
 ### Readable text measure
 
-The content rail has no hard max-width. Readability is controlled by:
-- Gutter: `clamp(1rem, 3vw, 3rem)` per side ensures text never touches edges.
-- Code blocks and tool cards scroll horizontally within the rail.
-- At 1920px with 3rem gutters, text measure is approximately 1752px -- within comfortable reading range.
+The message column uses a **dual-column** layout:
+- **Messages**: `max-w-[48rem]` (768px) centered with `mx-auto`, plus `px-[clamp(1rem,3vw,3rem)]` gutters.
+  This caps prose at a comfortable reading width at all viewport sizes.
+- **Composer**: `w-full`, no max-width -- fills the full rail width for spacious input.
+- Code blocks and tool cards scroll horizontally within the message column.
+- At 1920px the message column is 768px (fixed cap); the composer is ~1584px wide.
 
 ### Tool / code width behavior
 
@@ -439,7 +479,7 @@ The content rail has no hard max-width. Readability is controlled by:
 - **Auto-scroll**: MutationObserver on Viewport; triggers when `scrollHeight - scrollTop - clientHeight < 200`.
 - **On send**: New user message triggers scroll to bottom (via MutationObserver).
 - **During streaming**: Auto-scroll continues to follow new deltas.
-- **User scroll-up**: Auto-scroll pauses; a "Scroll to bottom" indicator is not yet implemented (deferred).
+- **User scroll-up**: Auto-scroll pauses; a "Scroll to bottom" glass pill floats above the composer (see section 14).
 
 ## 9. Composer specification
 
@@ -562,7 +602,7 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat only; sidebar is off-canvas drawer (closed by default) |
 | Sidebar mode | Drawer: `max-md:fixed inset-y-0 left-0 z-40 w-[min(85vw,20rem)]` |
 | Right sidebar | N/A |
-| Content rail | Full width minus gutter; `px-[clamp(1rem,3vw,3rem)]` = 1rem per side = 288px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | Single row; capabilities wrap if needed; labels truncate at 10rem |
 | Header | Menu button visible; RTAI title; connection dot; agent label truncated |
 | Expected scrolling | Single scroll region (Viewport); composer sticky at bottom |
@@ -574,7 +614,7 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat only |
 | Sidebar mode | Drawer; same as 320px |
 | Right sidebar | N/A |
-| Content rail | `px-[clamp(1rem,3vw,3rem)]` = ~1.125rem per side = ~337px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | Same as 320px; may show 2-3 controls per row |
 | Header | Same as 320px |
 | Expected scrolling | Single scroll region |
@@ -586,7 +626,7 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat; sidebar becomes visible as static column |
 | Sidebar mode | Static column: `w-[clamp(14rem,18vw,18rem)]` = ~14rem (224px) at this width |
 | Right sidebar | N/A |
-| Content rail | Full remaining width minus sidebar; `px-[clamp(1rem,3vw,3rem)]` = ~1.5rem per side |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | More horizontal room; 2-3 controls per row before wrapping |
 | Header | Menu button hidden (`md:hidden`); title + dot + agent label |
 | Expected scrolling | Single scroll region; sidebar has independent scroll |
@@ -598,7 +638,7 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat + sidebar |
 | Sidebar mode | Static: `w-[clamp(14rem,18vw,18rem)]` = ~18.4rem (294px) |
 | Right sidebar | N/A |
-| Content rail | `px-[clamp(1rem,3vw,3rem)]` = ~2.25rem per side = ~813px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | 3-4 controls fit in one row; no wrapping needed |
 | Header | Same as 768px |
 | Expected scrolling | Single scroll region |
@@ -610,7 +650,7 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat + sidebar |
 | Sidebar mode | Static: `w-[clamp(14rem,18vw,18rem)]` = ~23rem (368px) |
 | Right sidebar | N/A |
-| Content rail | `px-[clamp(1rem,3vw,3rem)]` = 3rem per side (capped) = ~1104px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | All 4 controls in one row comfortably |
 | Header | Same |
 | Expected scrolling | Single scroll region |
@@ -622,7 +662,7 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat + sidebar |
 | Sidebar mode | Static: clamped at 18rem (288px) maximum |
 | Right sidebar | N/A |
-| Content rail | `px-[clamp(1rem,3vw,3rem)]` = 3rem per side = ~1296px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | Single row, ample space |
 | Header | Same |
 | Expected scrolling | Single scroll region |
@@ -634,10 +674,10 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat + sidebar |
 | Sidebar mode | Static: 18rem (288px) maximum |
 | Right sidebar | N/A |
-| Content rail | `px-[clamp(1rem,3vw,3rem)]` = 3rem per side = ~1752px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | Single row |
 | Header | Same |
-| Expected scrolling | Single scroll region; wide content may benefit from future max-width |
+| Expected scrolling | Single scroll region; prose capped at 768px for readability |
 
 ### 2560px (QHD)
 
@@ -646,26 +686,53 @@ Each control is a 12px-height chip with icon + label + optional pending spinner.
 | Visible panels | Main chat + sidebar |
 | Sidebar mode | Static: 18rem (288px) maximum |
 | Right sidebar | N/A |
-| Content rail | `px-[clamp(1rem,3vw,3rem)]` = 3rem per side = ~2496px content |
+| Content rail | Messages: `max-w-[48rem] mx-auto` + `px-[clamp(1rem,3vw,3rem)]`; Composer: `w-full` |
 | Composer control behavior | Single row |
 | Header | Same |
-| Expected scrolling | Single scroll region; text may be wider than optimal for prose reading |
+| Expected scrolling | Single scroll region; prose capped at 768px for readability |
 
-**Note on wide screens**: At 2560px the text measure (~2496px) exceeds comfortable
-prose readability. This is intentional -- code blocks and tool output benefit from
-full width. Future phases may introduce a `max-w` cap on the message column specifically
-while keeping the composer full-width, matching OpenChamber's `.chat-column` vs
-`.chat-input-column` distinction. For now, a single unified rail is the specified behavior.
+**Dual-column layout at all widths**: The message column is capped at `max-w-[48rem]`
+(768px) for optimal prose readability, while the composer remains full-width. This
+matches OpenChamber's `.chat-column` vs `.chat-input-column` distinction exactly.
 
 ## 10. Right sidebar and right rail
 
 ### Purpose (deferred)
 
-OpenChamber uses a right context panel (min 380px, max 1400px, default 600px) for
-files, diff, terminal, plan, and git views -- opened via a 44px icon rail below the
-main content area. RTAI has no equivalent backend surfaces yet.
+OpenChamber uses a right context panel (`packages/ui/src/components/layout/ContextPanel.tsx`)
+for files, diff, terminal, plan, and git views, opened via a 44px icon rail
+(`packages/ui/src/components/layout/ContextPanelRail.tsx:294`) below the main content area.
+RTAI has no equivalent backend surfaces yet.
 
-### Target definition
+### Exact dimensions (from OpenChamber source)
+
+| Property | Value | Source |
+|---|---|---|
+| Right rail width | `w-11` (44px) fixed | `ContextPanelRail.tsx:294` — `className="flex h-full w-11 flex-shrink-0 flex-col items-center gap-1 bg-background py-2"` |
+| Panel minimum width | 380px | `ContextPanel.tsx:52` — `const CONTEXT_PANEL_MIN_WIDTH = 380` |
+| Panel maximum width | 1400px | `ContextPanel.tsx:53` — `const CONTEXT_PANEL_MAX_WIDTH = 1400` |
+| Panel default width | 600px | `ContextPanel.tsx:54` — `const CONTEXT_PANEL_DEFAULT_WIDTH = 600` |
+| Resize handle | 3px wide, right edge of panel | `ContextPanel.tsx:155` — `'absolute right-0 top-0 z-20 h-full w-[3px] cursor-col-resize'` |
+| Resize clamp | `Math.min(1400, Math.max(380, round(width)))` | `ContextPanel.tsx:81-87` |
+| Resize follow interval | 100ms | `ContextPanel.tsx:55` — `const RESIZE_FOLLOW_INTERVAL_MS = 100` |
+| Tab label truncation | 24 characters | `ContextPanel.tsx:56` — `const CONTEXT_TAB_LABEL_MAX_CHARS = 24` |
+
+### Closed-by-default behavior
+
+The panel starts **closed** (width = 0). It opens only when the user clicks a rail
+icon. There is no auto-open for any directory type. The rail icon for the active
+surface receives `text-primary`; all others stay `text-muted-foreground`.
+
+### Mobile / narrow behavior
+
+- When the main content area (excluding sidebar) is narrower than 640px and the
+  panel is open, the panel overlays the chat area as a full-height absolute layer:
+  `absolute inset-0 z-20 bg-background`. The rail remains visible as a 44px strip
+  on the right edge.
+- On mobile (< 768px) the rail is hidden; the panel is inaccessible until a future
+  mobile-specific entry point is defined.
+
+### Target structure
 
 When implemented, the right side will consist of:
 
@@ -682,34 +749,18 @@ When implemented, the right side will consist of:
 - Min width: 380px.
 - Max width: 1400px.
 - Default width: 600px.
-- Resizable via pointer events on the left edge (3px resize handle).
+- Resizable via pointer events on the left edge (3px resize handle, `cursor-col-resize`).
 - Background: `bg-background`.
 - Border-left: `border-l border-border`.
 - Contains tabbed surface views (files, diff, terminal, plan, etc.).
-
-### Visibility
-
-- Rail is always visible when a directory context exists.
-- Panel is hidden by default; opened by clicking a rail icon.
-- Panel collapses to overlay when main area is too narrow for both.
-
-### Narrow-width behavior
-
-- When main area width < 640px with rail open: panel overlays the chat area
-  (full-height, `absolute inset-0 z-20 bg-background`).
-- Rail remains visible as a thin strip on the right edge.
-
-### Collapse behavior
-
-- Panel width animates with `transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]`.
-- Rail icon for active surface gets `text-primary` indicator.
+- Width animates with `transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]`.
 - Closing panel does not unmount content (keeps state alive).
 
 ### Difference: full panel vs. icon rail
 
 | Aspect | Right rail | Right sidebar panel |
 |---|---|---|
-| Width | Fixed 44px | Variable 380-1400px |
+| Width | Fixed 44px | Variable 380–1400px (default 600px) |
 | Content | Icon buttons only | Tabbed surface views |
 | Interactivity | Click to open panel | Drag resize, tab switch, view content |
 | Z-index | Below panel (panel overlays rail area when open) | Above main chat when open |
@@ -927,9 +978,9 @@ Scope:
 - [x] StatusBar: connection dot, status text, agent label, last error.
 - [x] Markdown rendering via `MarkdownTextPrimitive` in message parts.
 - [x] Code blocks: horizontal scroll, monospace font.
-- [ ] Scroll-to-bottom floating button: deferred.
-- [ ] Message timestamps: deferred.
-- [ ] Message copy/export: deferred.
+- [ ] Scroll-to-bottom floating button: glass pill with arrow-down icon, visible when user scrolls up more than 200px from bottom; positioned above the composer within the rail column (`chat-input-column` alignment). Shows working status label during streaming.
+- [ ] Message timestamps: hover-revealed timestamp on each message bubble.
+- [ ] Message copy/export: context menu on message hover to copy text or export transcript.
 
 ### Right-sidebar milestone
 
@@ -937,16 +988,17 @@ Deferred. Target defined in section 10. Requires backend session/context APIs.
 
 ### Later polish
 
-- [ ] Scroll-to-bottom floating button (OpenChamber pattern: glass pill above composer).
+- [ ] Scroll-to-bottom floating button (OpenChamber pattern: glass pill above composer, see section 8).
 - [ ] Message hover actions (copy, timestamp).
 - [ ] Conversation timeline / turn navigation rail.
 - [ ] Work status panel (context usage, subagent cost -- OpenChamber pattern).
-- [ ] Focus mode (fullscreen composer -- OpenChamber pattern).
-- [ ] Session history pagination in sidebar (Phase 5 backend dependency).
+- [ ] Mobile expanded composer (drag-handle fullscreen mode -- deferred per product decision).
+- [ ] Session history pagination in sidebar (Phase 5 backend dependency; keyset cursor pagination).
 - [ ] Native session resume (Phase 5+ backend dependency).
 - [ ] Permission dialog refinement (currently rendered inside Message parts).
 - [ ] Drag-to-resize sidebar (OpenChamber pattern).
-- [ ] Right context panel and rail (OpenChamber pattern).
+- [ ] Right context panel and rail (OpenChamber pattern, see section 10).
+- [ ] Focus mode (hides sidebar, expands composer -- deferred per product decision).
 
 ## 15. Visual acceptance checklist
 
@@ -989,7 +1041,7 @@ Every milestone completion must pass these observable criteria before marking do
 - [ ] 320px: single-column chat, drawer sidebar, no layout break.
 - [ ] 768px: sidebar becomes static column; menu button disappears.
 - [ ] 1024px: comfortable two-column layout; composer controls in one row.
-- [ ] 1920px+: wide content area; gutters at 3rem maximum.
+- [ ] 1920px+: wide content area; message column capped at 48rem, composer full-width, gutters at 3rem maximum.
 - [ ] No horizontal scroll on any viewport width.
 - [ ] Touch targets are at least 32x32px on all interactive elements.
 
@@ -1011,34 +1063,47 @@ Every milestone completion must pass these observable criteria before marking do
 - [ ] Theme preference persists in localStorage across reloads.
 - [ ] All semantic tokens swap correctly between themes (no raw color leaks).
 
-## Open product decisions
+## Resolved product decisions
 
-The following decisions require explicit product preference from the RTAI maintainers
-before implementation can proceed. They are intentionally left unresolved in this spec.
+These decisions were pending at specification time. They are now recorded as final
+choices and must not be revisited during implementation without a documented spec
+amendment.
 
-1. **Content-rail maximum-width cap**: Should the message column have a hard maximum
-   (e.g. `max-w-[48rem]`) on very wide screens (>1920px) for optimal prose readability,
-   while keeping the composer full-width? This matches OpenChamber's dual-column pattern
-   but diverges from the current unified rail approach.
+### 1. Scroll-to-bottom floating button — included in thread milestone
 
-2. **Scroll-to-bottom floating button**: OpenChamber shows a glass pill above the composer
-   when the user has scrolled up. RTAI currently has no such indicator. Should this be
-   implemented in the Composer milestone or deferred?
+OpenChamber shows a glass pill above the composer when the user has scrolled up
+(`packages/ui/src/components/chat/components/ScrollToBottomButton.tsx`).
+RTAI will implement an equivalent: a glass pill with `arrow-down` icon, positioned
+within the `chat-input-column` rail (aligned with the composer), visible when the
+user is more than 200px from the bottom. During streaming it shows the current
+working status label. This is part of the Thread / empty state milestone, not a
+separate polish item.
 
-3. **Sidebar session list loading strategy**: Phase 5 adds SQLite history with REST APIs.
-   Should the sidebar load all sessions eagerly or use keyset pagination with lazy load
-   as the user scrolls up?
+### 2. Sidebar session list loading — backend cursor/keyset pagination
 
-4. **Right context panel trigger**: When the right panel is implemented, should it open
-   by default for non-chat directories (project context) or only when explicitly triggered
-   by the user via the rail?
+Phase 5 adds SQLite history with REST endpoints (`GET /api/sessions` with opaque
+base64 cursor pagination). The sidebar will consume these cursors and load pages
+as the user scrolls upward. Eager loading of all sessions is rejected; keyset
+pagination with cursor echo-back is the only supported strategy. See
+`docs/ARCHITECTURE.md` for the cursor contract.
 
-5. **Mobile expanded composer**: OpenChamber supports a fullscreen expanded composer on
-   mobile via a drag handle. RTAI currently uses a single compact composer. Should mobile
-   get an expanded mode?
+### 3. Right context panel — closed by default, opened explicitly
 
-6. **Focus mode**: OpenChamber has a focus mode that hides the sidebar and expands the
-   composer. Should RTAI support this?
+When the right context panel and rail are implemented (deferred milestone), the
+panel starts closed. The user opens it by clicking a rail icon; there is no
+auto-open behavior for any directory type. The rail itself is always visible when
+a directory context exists. See section 10 for sizing and behavior.
 
-These decisions should be resolved in a dedicated product triage before the corresponding
-milestone begins.
+### 4. Mobile expanded composer — deferred
+
+OpenChamber supports a fullscreen expanded composer on mobile via a drag handle
+(`packages/ui/src/components/chat/ChatInput.tsx` `isExpandedInput` path, mobile
+fullscreen form). RTAI will keep a single compact composer for the foreseeable
+future. This feature is deferred and must not be implemented in any current
+milestone.
+
+### 5. Focus mode — deferred
+
+OpenChamber has a focus mode that hides the sidebar and expands the composer
+(`packages/ui/src/components/chat/composer/ui/FocusModeButton.tsx`). RTAI will
+not implement focus mode in any planned milestone. This feature is deferred.
