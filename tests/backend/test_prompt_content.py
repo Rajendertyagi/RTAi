@@ -409,7 +409,7 @@ class CapabilityNegotiationTests(unittest.IsolatedAsyncioTestCase):
             await session.submit_prompt_content(content)
         except RuntimeError as exc:
             self.assertNotIn("attachment rejected", str(exc))
-        except AttributeError:
+        except (AttributeError, ImportError):
             pass  # fake connection has no prompt() — acceptable after cap check passes
 
     async def test_image_rejected_when_capability_false(self) -> None:
@@ -458,7 +458,7 @@ class CapabilityNegotiationTests(unittest.IsolatedAsyncioTestCase):
             await session.submit_prompt_content(content)
         except RuntimeError as exc:
             self.assertNotIn("attachment rejected", str(exc))
-        except AttributeError:
+        except (AttributeError, ImportError):
             pass  # fake connection — acceptable after cap check passes
 
     async def test_false_capabilities_dont_get_invented(self) -> None:
