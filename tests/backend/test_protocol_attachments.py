@@ -7,7 +7,6 @@ without breaking the live stream.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -56,6 +55,7 @@ def _read_until_ready(ws) -> list[dict]:
 # Fake adapter that records submitted content
 # ---------------------------------------------------------------------------
 
+
 class RecordingAdapter(AgentAdapter):
     """Adapter that records prompt content for assertion."""
 
@@ -68,8 +68,12 @@ class RecordingAdapter(AgentAdapter):
         self._closed = False
         self.submitted_texts: list[str] = []
         self.submitted_contents: list[list[Any]] = []
-        snap_attachments = attachments if attachments is not None else UnavailableCapability(
-            UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER, "No attachments"
+        snap_attachments = (
+            attachments
+            if attachments is not None
+            else UnavailableCapability(
+                UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER, "No attachments"
+            )
         )
         self._snap = CapabilitySnapshot(
             source="recording",
@@ -115,10 +119,20 @@ class FailingRepository(HistoryRepository):
     def get_session(self, rtai_session_id: str) -> HistorySession | None:
         return None
 
-    def list_sessions(self, cursor: str | None = None, limit: int = 50) -> tuple[list[HistorySession], str | None]:
+    def list_sessions(
+        self, cursor: str | None = None, limit: int = 50
+    ) -> tuple[list[HistorySession], str | None]:
         return [], None
 
-    def record_native_mapping(self, rtai_session_id: str, native_session_id: str, *, adapter_kind: str, resume_capable: bool | None, resume_reason: str | None) -> None:
+    def record_native_mapping(
+        self,
+        rtai_session_id: str,
+        native_session_id: str,
+        *,
+        adapter_kind: str,
+        resume_capable: bool | None,
+        resume_reason: str | None,
+    ) -> None:
         pass
 
     def set_title(self, rtai_session_id: str, title: str, *, user: bool) -> None:
@@ -133,7 +147,9 @@ class FailingRepository(HistoryRepository):
     def append_event(self, event: HistoryEvent) -> bool:
         raise HistoryStorageError("simulated persistence failure")
 
-    def get_events(self, rtai_session_id: str, cursor: str | None = None, limit: int = 200) -> tuple[list[HistoryEvent], str | None]:
+    def get_events(
+        self, rtai_session_id: str, cursor: str | None = None, limit: int = 200
+    ) -> tuple[list[HistoryEvent], str | None]:
         return [], None
 
     def close(self) -> None:
@@ -144,10 +160,15 @@ class FailingRepository(HistoryRepository):
 # Phase 5: Protocol validation and WebSocket dispatch
 # ---------------------------------------------------------------------------
 
+
 class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
     """Multi-block prompt validation and WebSocket dispatch with fakes."""
 
-    def _make_client(self, adapter: RecordingAdapter | None = None, repo: HistoryRepository | None = None) -> TestClient:
+    def _make_client(
+        self,
+        adapter: RecordingAdapter | None = None,
+        repo: HistoryRepository | None = None,
+    ) -> TestClient:
         fa = MagicMock()
         fa.create.return_value = adapter or RecordingAdapter()
         app = create_app(adapter_factory=fa, history_repository=repo)
@@ -168,24 +189,31 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r1",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [
-                        {"kind": "text", "name": "msg", "text": "look at this"},
-                        {"kind": "image", "name": "img.png", "mime_type": "image/png", "data_base64": _IMAGE_B64},
-                    ],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r1",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {"kind": "text", "name": "msg", "text": "look at this"},
+                            {
+                                "kind": "image",
+                                "name": "img.png",
+                                "mime_type": "image/png",
+                                "data_base64": _IMAGE_B64,
+                            },
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(8):
                     msgs.append(ws.receive_json())
                     if msgs[-1].get("type") == "command_result":
                         break
-                cr = [m for m in msgs if m["type"] == "command_result"][0]
+                cr = next(m for m in msgs if m["type"] == "command_result")
                 self.assertTrue(cr["success"])
                 self.assertTrue(len(adapter.submitted_contents) >= 1)
                 blocks = adapter.submitted_contents[0]
@@ -212,19 +240,31 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r2",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [
-                        {"kind": "image", "name": "a.png", "mime_type": "image/png", "data_base64": _IMAGE_B64},
-                        {"kind": "text", "name": "msg", "text": "hello"},
-                        {"kind": "image", "name": "b.png", "mime_type": "image/png", "data_base64": _IMAGE_B64},
-                    ],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r2",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {
+                                "kind": "image",
+                                "name": "a.png",
+                                "mime_type": "image/png",
+                                "data_base64": _IMAGE_B64,
+                            },
+                            {"kind": "text", "name": "msg", "text": "hello"},
+                            {
+                                "kind": "image",
+                                "name": "b.png",
+                                "mime_type": "image/png",
+                                "data_base64": _IMAGE_B64,
+                            },
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(8):
                     msgs.append(ws.receive_json())
@@ -246,15 +286,17 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r3",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [{"kind": "video", "name": "v.mp4"}],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r3",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [{"kind": "video", "name": "v.mp4"}],
+                    }
+                )
                 result = ws.receive_json()
                 self.assertEqual(result["type"], "command_result")
                 self.assertFalse(result["success"])
@@ -279,18 +321,25 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r4",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [
-                        {"kind": "text", "name": "msg", "text": "hi"},
-                        {"kind": "image", "name": "img.png", "mime_type": "image/png", "data_base64": _IMAGE_B64},
-                    ],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r4",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {"kind": "text", "name": "msg", "text": "hi"},
+                            {
+                                "kind": "image",
+                                "name": "img.png",
+                                "mime_type": "image/png",
+                                "data_base64": _IMAGE_B64,
+                            },
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(5):
                     msgs.append(ws.receive_json())
@@ -318,15 +367,24 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r5",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [{"kind": "audio", "name": "a.wav", "mime_type": "audio/wav", "data_base64": _AUDIO_B64}],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r5",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {
+                                "kind": "audio",
+                                "name": "a.wav",
+                                "mime_type": "audio/wav",
+                                "data_base64": _AUDIO_B64,
+                            }
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(5):
                     msgs.append(ws.receive_json())
@@ -351,15 +409,24 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r6",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [{"kind": "embedded_text", "name": "e.txt", "mime_type": "text/plain", "text": "inline"}],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r6",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {
+                                "kind": "embedded_text",
+                                "name": "e.txt",
+                                "mime_type": "text/plain",
+                                "text": "inline",
+                            }
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(5):
                     msgs.append(ws.receive_json())
@@ -387,15 +454,24 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
                 _read_until_ready(ws)
                 # Send a 6 MiB image (exceeds 5 MiB limit)
                 big_b64 = "x" * (6 * 1024 * 1024)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r7",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [{"kind": "image", "name": "big.png", "mime_type": "image/png", "data_base64": big_b64}],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r7",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {
+                                "kind": "image",
+                                "name": "big.png",
+                                "mime_type": "image/png",
+                                "data_base64": big_b64,
+                            }
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(5):
                     msgs.append(ws.receive_json())
@@ -416,21 +492,23 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r8",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "text": "hello world",
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r8",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "text": "hello world",
+                    }
+                )
                 msgs = []
                 for _ in range(5):
                     msgs.append(ws.receive_json())
                     if msgs[-1].get("type") == "command_result":
                         break
-                cr = [m for m in msgs if m["type"] == "command_result"][0]
+                cr = next(m for m in msgs if m["type"] == "command_result")
                 self.assertTrue(cr["success"])
                 self.assertTrue(len(adapter.submitted_texts) >= 1)
         except WebSocketDisconnect:
@@ -452,15 +530,24 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r9",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [{"kind": "image", "name": "img.png", "mime_type": "image/png", "data_base64": _IMAGE_B64}],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r9",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {
+                                "kind": "image",
+                                "name": "img.png",
+                                "mime_type": "image/png",
+                                "data_base64": _IMAGE_B64,
+                            }
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(5):
                     msgs.append(ws.receive_json())
@@ -531,10 +618,15 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
 # Phase 10: Persistence degradation
 # ---------------------------------------------------------------------------
 
+
 class DegradationTests(unittest.IsolatedAsyncioTestCase):
     """Live streaming continues when history persistence fails."""
 
-    def _make_client(self, adapter: RecordingAdapter | None = None, repo: HistoryRepository | None = None) -> TestClient:
+    def _make_client(
+        self,
+        adapter: RecordingAdapter | None = None,
+        repo: HistoryRepository | None = None,
+    ) -> TestClient:
         fa = MagicMock()
         fa.create.return_value = adapter or RecordingAdapter()
         app = create_app(adapter_factory=fa, history_repository=repo)
@@ -549,20 +641,21 @@ class DegradationTests(unittest.IsolatedAsyncioTestCase):
         exc_type = WebSocketDisconnect if WebSocketDisconnect is not Exception else None
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
-                events = _read_until_ready(ws)
+                _read_until_ready(ws)
                 # Check that history_degraded diagnostic was emitted
-                degraded = [e for e in events if e.get("code") == "history_degraded"]
-                # The degraded diagnostic may or may not appear during startup
+                # (may not appear if no event triggers persistence during startup)
                 # depending on whether any event triggers persistence.
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r1",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "text": "hello",
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r1",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "text": "hello",
+                    }
+                )
                 msgs = []
                 for _ in range(10):
                     msgs.append(ws.receive_json())
@@ -571,7 +664,7 @@ class DegradationTests(unittest.IsolatedAsyncioTestCase):
                 types = [m["type"] for m in msgs]
                 # The prompt should still complete (command_result + done).
                 self.assertIn("command_result", types)
-                cr = [m for m in msgs if m["type"] == "command_result"][0]
+                cr = next(m for m in msgs if m["type"] == "command_result")
                 self.assertTrue(cr["success"])
         except WebSocketDisconnect:
             if exc_type is not None:
@@ -591,38 +684,45 @@ class DegradationTests(unittest.IsolatedAsyncioTestCase):
                 _read_until_ready(ws)
                 # Send two prompts; only the first should trigger the degraded
                 # diagnostic (if any).
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r1",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "text": "first",
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r1",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "text": "first",
+                    }
+                )
                 # Drain first prompt: read until its command_result (not the
                 # history_degraded diagnostic, which is a separate event).
                 for _ in range(10):
                     ev = ws.receive_json()
-                    if ev.get("type") == "command_result" and ev.get("request_id") == "r1":
+                    if (
+                        ev.get("type") == "command_result"
+                        and ev.get("request_id") == "r1"
+                    ):
                         break
                 else:
                     self.fail("First prompt did not receive its command_result")
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r2",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t2",
-                    "message_id": "m2",
-                    "text": "second",
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r2",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t2",
+                        "message_id": "m2",
+                        "text": "second",
+                    }
+                )
                 msgs = []
                 for _ in range(10):
                     msgs.append(ws.receive_json())
                     if msgs[-1].get("type") == "command_result":
                         break
-                cr = [m for m in msgs if m["type"] == "command_result"][0]
+                cr = next(m for m in msgs if m["type"] == "command_result")
                 self.assertTrue(cr["success"])
         except WebSocketDisconnect:
             if exc_type is not None:
@@ -644,17 +744,24 @@ class DegradationTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                ws.send_json({
-                    "protocol_version": 1,
-                    "request_id": "r1",
-                    "type": "prompt",
-                    "session_id": "s1",
-                    "turn_id": "t1",
-                    "message_id": "m1",
-                    "prompt": [
-                        {"kind": "image", "name": "img.png", "mime_type": "image/png", "data_base64": _IMAGE_B64},
-                    ],
-                })
+                ws.send_json(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "r1",
+                        "type": "prompt",
+                        "session_id": "s1",
+                        "turn_id": "t1",
+                        "message_id": "m1",
+                        "prompt": [
+                            {
+                                "kind": "image",
+                                "name": "img.png",
+                                "mime_type": "image/png",
+                                "data_base64": _IMAGE_B64,
+                            },
+                        ],
+                    }
+                )
                 msgs = []
                 for _ in range(10):
                     msgs.append(ws.receive_json())

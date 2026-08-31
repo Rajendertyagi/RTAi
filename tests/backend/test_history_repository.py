@@ -17,15 +17,14 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "backend"))
 
-from app.history.errors import CursorValidationError, HistoryStorageError
+from app.api.routes import _parse_limit
+from app.history.errors import CursorValidationError
 from app.history.models import HistoryEvent, HistorySession, SessionStatus
 from app.history.sanitize import (
     build_event_key,
-    event_discriminator,
     is_persistable,
     sanitize_event_payload,
 )
@@ -34,10 +33,7 @@ from app.history.sqlite_repository import (
     _decode_cursor,
     _encode_cursor,
 )
-from app.api.routes import _parse_limit, router
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,30 +50,30 @@ def _make_repo(td: str) -> SqliteHistoryRepository:
 
 
 def _make_session(**overrides: Any) -> HistorySession:
-    defaults = dict(
-        rtai_session_id=_SESSION_ID,
-        adapter_kind="acp:opencode",
-        cwd="/tmp/project",
-        created_at=_NOW,
-        updated_at=_NOW,
-        status=SessionStatus.ACTIVE,
-    )
+    defaults = {
+        "rtai_session_id": _SESSION_ID,
+        "adapter_kind": "acp:opencode",
+        "cwd": "/tmp/project",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+        "status": SessionStatus.ACTIVE,
+    }
     defaults.update(overrides)
     return HistorySession(**defaults)  # type: ignore[arg-type]
 
 
 def _make_event(**overrides: Any) -> HistoryEvent:
-    defaults = dict(
-        rtai_session_id=_SESSION_ID,
-        event_type="delta",
-        event_key="delta|turn-a||1|",
-        payload={"text": "hello"},
-        turn_id=_TURN_ID,
-        message_id=_MESSAGE_ID,
-        sequence=1,
-        timestamp=_NOW,
-        created_at=_NOW,
-    )
+    defaults = {
+        "rtai_session_id": _SESSION_ID,
+        "event_type": "delta",
+        "event_key": "delta|turn-a||1|",
+        "payload": {"text": "hello"},
+        "turn_id": _TURN_ID,
+        "message_id": _MESSAGE_ID,
+        "sequence": 1,
+        "timestamp": _NOW,
+        "created_at": _NOW,
+    }
     defaults.update(overrides)
     return HistoryEvent(**defaults)  # type: ignore[arg-type]
 
@@ -85,6 +81,7 @@ def _make_event(**overrides: Any) -> HistoryEvent:
 # ---------------------------------------------------------------------------
 # Phase 6: Attachment persistence and privacy
 # ---------------------------------------------------------------------------
+
 
 class SanitizeTests(unittest.TestCase):
     """Sanitization preserves trusted fields and strips raw attachment content."""
@@ -96,11 +93,21 @@ class SanitizeTests(unittest.TestCase):
             "turn_id": "t1",
             "message_id": "m1",
             "prompt": [
-                {"kind": "image", "name": "img.png", "mime_type": "image/png",
-                 "data_base64": "aGVsbG8=", "size_bytes": 5},
+                {
+                    "kind": "image",
+                    "name": "img.png",
+                    "mime_type": "image/png",
+                    "data_base64": "aGVsbG8=",
+                    "size_bytes": 5,
+                },
                 {"kind": "text", "name": "msg", "text": "hello"},
-                {"kind": "embedded_blob", "name": "b.zip", "mime_type": "application/zip",
-                 "data_base64": "dW5zYWZl", "size_bytes": 6},
+                {
+                    "kind": "embedded_blob",
+                    "name": "b.zip",
+                    "mime_type": "application/zip",
+                    "data_base64": "dW5zYWZl",
+                    "size_bytes": 6,
+                },
             ],
         }
         result = sanitize_event_payload(frame)
@@ -114,19 +121,33 @@ class SanitizeTests(unittest.TestCase):
             self.assertNotIn("uri", block)
             self.assertNotIn("query", block)
             self.assertNotIn("fragment", block)
-        self.assertEqual(prompt[0], {
-            "kind": "image", "name": "img.png",
-            "mime_type": "image/png", "size_bytes": 5,
-        })
+        self.assertEqual(
+            prompt[0],
+            {
+                "kind": "image",
+                "name": "img.png",
+                "mime_type": "image/png",
+                "size_bytes": 5,
+            },
+        )
         self.assertEqual(prompt[1], {"kind": "text", "name": "msg"})
-        self.assertEqual(prompt[2], {
-            "kind": "embedded_blob", "name": "b.zip",
-            "mime_type": "application/zip", "size_bytes": 6,
-        })
+        self.assertEqual(
+            prompt[2],
+            {
+                "kind": "embedded_blob",
+                "name": "b.zip",
+                "mime_type": "application/zip",
+                "size_bytes": 6,
+            },
+        )
 
     def test_sanitize_does_not_mutate_live_frame(self) -> None:
-        frame = {"type": "user_message", "prompt": [{"kind": "image", "data_base64": "abc"}]}
+        frame = {
+            "type": "user_message",
+            "prompt": [{"kind": "image", "data_base64": "abc"}],
+        }
         import copy
+
         original = copy.deepcopy(frame)
         sanitize_event_payload(frame)
         self.assertEqual(frame, original)
@@ -181,6 +202,7 @@ class SanitizeTests(unittest.TestCase):
 # Phase 7: SQLite repository tests
 # ---------------------------------------------------------------------------
 
+
 class SqliteRepositoryTests(unittest.TestCase):
     """Schema, sessions, events, pagination — all against a real temp database."""
 
@@ -191,6 +213,7 @@ class SqliteRepositoryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._repo.close()
         import shutil
+
         shutil.rmtree(self._td, ignore_errors=True)
 
     # -- schema --
@@ -233,7 +256,8 @@ class SqliteRepositoryTests(unittest.TestCase):
     def test_native_session_mapping(self) -> None:
         self._repo.create_session(_make_session())
         self._repo.record_native_mapping(
-            _SESSION_ID, "native-1",
+            _SESSION_ID,
+            "native-1",
             adapter_kind="acp:opencode",
             resume_capable=True,
             resume_reason=None,
@@ -247,14 +271,24 @@ class SqliteRepositoryTests(unittest.TestCase):
         (adapter_kind, native_session_id) raises IntegrityError."""
         self._repo.create_session(_make_session(rtai_session_id="s1"))
         self._repo.create_session(_make_session(rtai_session_id="s2"))
-        self._repo.record_native_mapping("s1", "nat-a", adapter_kind="acp", resume_capable=None, resume_reason=None)
-        self._repo.record_native_mapping("s2", "nat-b", adapter_kind="acp", resume_capable=None, resume_reason=None)
+        self._repo.record_native_mapping(
+            "s1", "nat-a", adapter_kind="acp", resume_capable=None, resume_reason=None
+        )
+        self._repo.record_native_mapping(
+            "s2", "nat-b", adapter_kind="acp", resume_capable=None, resume_reason=None
+        )
         self.assertIsNotNone(self._repo.get_session("s1"))
         self.assertIsNotNone(self._repo.get_session("s2"))
         # Same (adapter_kind, native_session_id) on a different rtai session → conflict.
         self._repo.create_session(_make_session(rtai_session_id="s3"))
         with self.assertRaises(sqlite3.IntegrityError):
-            self._repo.record_native_mapping("s3", "nat-a", adapter_kind="acp", resume_capable=None, resume_reason=None)
+            self._repo.record_native_mapping(
+                "s3",
+                "nat-a",
+                adapter_kind="acp",
+                resume_capable=None,
+                resume_reason=None,
+            )
 
     def test_title_precedence(self) -> None:
         self._repo.create_session(_make_session())
@@ -319,8 +353,12 @@ class SqliteRepositoryTests(unittest.TestCase):
     def test_session_recency_ordering(self) -> None:
         """Sessions are ordered newest-first by (updated_at, rtai_session_id)."""
         now = _NOW
-        self._repo.create_session(_make_session(rtai_session_id="s-b", updated_at=now + 100))
-        self._repo.create_session(_make_session(rtai_session_id="s-a", updated_at=now + 100))
+        self._repo.create_session(
+            _make_session(rtai_session_id="s-b", updated_at=now + 100)
+        )
+        self._repo.create_session(
+            _make_session(rtai_session_id="s-a", updated_at=now + 100)
+        )
         self._repo.create_session(_make_session(rtai_session_id="s-c", updated_at=now))
         items, _ = self._repo.list_sessions()
         ids = [s.rtai_session_id for s in items]
@@ -363,6 +401,7 @@ class SqliteRepositoryTests(unittest.TestCase):
             self.assertIsNone(scur)
         finally:
             import shutil
+
             repo.close()
             shutil.rmtree(td, ignore_errors=True)
 
@@ -378,11 +417,15 @@ class SqliteRepositoryTests(unittest.TestCase):
         def append_batch(start: int, count: int) -> None:
             try:
                 for i in range(count):
-                    self._repo.append_event(_make_event(event_key=f"k{start+i}", sequence=start + i + 1))
-            except Exception as exc:
+                    self._repo.append_event(
+                        _make_event(event_key=f"k{start + i}", sequence=start + i + 1)
+                    )
+            except RuntimeError as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=append_batch, args=(i * 10, 10)) for i in range(5)]
+        threads = [
+            threading.Thread(target=append_batch, args=(i * 10, 10)) for i in range(5)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -398,6 +441,7 @@ class SqliteRepositoryTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Phase 8: Strict cursor and limit tests
 # ---------------------------------------------------------------------------
+
 
 class CursorTests(unittest.TestCase):
     """Cursor encode/decode round-trip and strict validation."""
@@ -416,10 +460,10 @@ class CursorTests(unittest.TestCase):
         decoded = _decode_cursor(_encode_cursor("1", "2"))
         self.assertIsNotNone(decoded)
         # Version is stripped by _decode_cursor; verify the encoded form.
-        raw = _decode_cursor(_encode_cursor("1", "2"))
         encoded = _encode_cursor("1", "2")
         # The raw base64 decodes to "v1\x1f1\x1f2"
         import base64
+
         decoded_raw = base64.urlsafe_b64decode(encoded + "==").decode("utf-8")
         self.assertTrue(decoded_raw.startswith("v1"))
 
@@ -439,6 +483,7 @@ class CursorTests(unittest.TestCase):
     def test_invalid_utf8_rejected(self) -> None:
         # Valid URL-safe base64 that decodes to non-UTF-8 bytes.
         import base64
+
         raw_bytes = b"\x80\x81\x82"  # invalid UTF-8
         encoded = base64.urlsafe_b64encode(raw_bytes).decode("ascii")
         with self.assertRaises(CursorValidationError):
@@ -446,6 +491,7 @@ class CursorTests(unittest.TestCase):
 
     def test_missing_version_rejected(self) -> None:
         import base64
+
         encoded = base64.urlsafe_b64encode(b"no-version").decode("ascii")
         with self.assertRaises(CursorValidationError):
             _decode_cursor(encoded)
@@ -453,6 +499,7 @@ class CursorTests(unittest.TestCase):
     def test_empty_decoded_payload_returns_empty_list(self) -> None:
         # A cursor that decodes to just the version with no fields yields [].
         import base64
+
         encoded = base64.urlsafe_b64encode(b"v1").decode("ascii")
         result = _decode_cursor(encoded)
         self.assertEqual(result, [])
@@ -462,7 +509,6 @@ class CursorTests(unittest.TestCase):
         encoded = _encode_cursor("999", "secret-id")
         self.assertIsInstance(encoded, str)
         # URL-safe base64 alphabet plus '=' padding
-        import re
         self.assertRegex(encoded, r"^[A-Za-z0-9-_]+=*$")
 
 
@@ -503,6 +549,7 @@ class LimitParseTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Phase 9: Event identity and collision tests
 # ---------------------------------------------------------------------------
+
 
 class EventIdentityTests(unittest.TestCase):
     """Every legitimate event persists separately; true duplicates deduplicate."""
@@ -594,6 +641,7 @@ class EventIdentityTests(unittest.TestCase):
             self.assertEqual(ordinals, [1, 2, 3, 4, 5])
         finally:
             import shutil
+
             shutil.rmtree(td, ignore_errors=True)
 
     def test_occurrence_values_not_on_wire(self) -> None:
@@ -620,6 +668,7 @@ class EventIdentityTests(unittest.TestCase):
             self.assertEqual(len(items), 1)
         finally:
             import shutil
+
             shutil.rmtree(td, ignore_errors=True)
 
     def test_separate_persist_frame_calls_generate_distinct_keys(self) -> None:
@@ -652,11 +701,13 @@ class EventIdentityTests(unittest.TestCase):
             self.assertEqual(keys, {"part_delta|t1||1|p1", "part_delta|t1||2|p1"})
         finally:
             import shutil
+
             shutil.rmtree(td, ignore_errors=True)
 
     def test_no_event_key_uses_timestamp(self) -> None:
         """event_key must not contain any timestamp component."""
         import time
+
         ts = str(int(time.time() * 1000))
         key = build_event_key("delta", "t1", "m1", 1, None)
         self.assertNotIn(ts, key)
