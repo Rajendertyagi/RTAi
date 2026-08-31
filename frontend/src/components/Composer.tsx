@@ -10,16 +10,15 @@ import { CapabilityControls } from "./CapabilitySelectors";
 
 export function Composer() {
   const aui = useAui();
-  // Show Stop as soon as a dispatch is in flight — whether the turn has
-  // started streaming (activeTurnId) or we're still waiting for the backend
-  // to acknowledge (promptRequestId or cancelPending). This avoids the
-  // previous race where a hang before the user_message echo left the user
-  // with no way to stop the request.
   const isRunning = useChatStore(
     (s) =>
       s.activeTurnId !== null ||
       s.promptRequestId !== null ||
       s.cancelPending,
+  );
+  // Block sending while permission approvals are pending and auto-approve is off.
+  const hasPendingPermissions = useChatStore(
+    (s) => s.pendingPermissions.size > 0 && !s.autoApprove,
   );
   const handleCancel = () => aui.thread().cancelRun();
 
@@ -53,6 +52,7 @@ export function Composer() {
             </button>
           ) : (
             <ComposerPrimitive.Send
+              disabled={hasPendingPermissions}
               data-testid="composer-send"
               aria-label="Send message"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
@@ -65,6 +65,15 @@ export function Composer() {
           {/* Runtime-only actions (attachment / command) render here only
               when the backend exposes a working interaction — no stubs. */}
           <CapabilityControls />
+          {hasPendingPermissions && (
+            <span
+              className="text-xs text-status-warning"
+              role="status"
+              aria-live="polite"
+            >
+              Waiting for approval…
+            </span>
+          )}
         </div>
       </ComposerPrimitive.Root>
     </div>

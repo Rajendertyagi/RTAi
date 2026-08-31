@@ -7,6 +7,7 @@ import { useChatStore } from "../state/chatStore";
 import { MessageItem } from "./Message";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
+import { PermissionDialog } from "./PermissionDialog";
 import { SHARED_CONTENT_COLUMN } from "../lib/shellLayout";
 
 export interface ChatScreenProps {
@@ -106,6 +107,9 @@ export function ChatScreen({
             <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
               {/* Persistent status bar */}
               <StatusBar />
+
+              {/* Permission approval cards */}
+              <PermissionDialog />
 
               {/* Composer card */}
               <Composer />

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Bot, Brain, Cpu, Layers } from "lucide-react";
+import { Bot, Brain, Cpu, Layers, ShieldCheck, ShieldOff } from "lucide-react";
 import { useChatStore, type PendingSelection } from "../state/chatStore";
 import type { CapabilityItem, UnavailableReason } from "../types/protocol";
 
@@ -339,6 +339,42 @@ export function CapabilityControls() {
       {renderModel()}
       {renderMode()}
       {renderThinking()}
+      {/* Auto-approve toggle — always visible, per-session only */}
+      <AutoApproveToggle />
     </div>
+  );
+}
+
+function AutoApproveToggle() {
+  const autoApprove = useChatStore((s) => s.autoApprove);
+  const setAutoApprove = useChatStore((s) => s.setAutoApprove);
+  const pendingPermissions = useChatStore((s) => s.pendingPermissions.size);
+
+  return (
+    <button
+      type="button"
+      onClick={() => setAutoApprove(!autoApprove)}
+      aria-pressed={autoApprove}
+      aria-label={autoApprove ? "Auto-approve permissions is on" : "Auto-approve permissions is off"}
+      title={autoApprove ? "Auto-approve: permissions resolved automatically" : "Auto-approve: not active, will prompt for each permission"}
+      data-testid="composer-auto-approve"
+      className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-interactive-focus-ring focus-visible:ring-offset-2 ${
+        autoApprove
+          ? "bg-status-success/10 text-status-success hover:bg-status-success/20"
+          : "text-muted-foreground hover:bg-interactive-hover"
+      }`}
+    >
+      {autoApprove ? (
+        <ShieldCheck className="h-3.5 w-3.5" />
+      ) : (
+        <ShieldOff className="h-3.5 w-3.5" />
+      )}
+      <span>AA</span>
+      {pendingPermissions > 0 && !autoApprove && (
+        <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-status-warning px-1 text-[10px] font-bold text-status-warning-foreground">
+          {pendingPermissions}
+        </span>
+      )}
+    </button>
   );
 }

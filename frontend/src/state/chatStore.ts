@@ -84,6 +84,9 @@ export interface ChatStateData {
   sendCommand: ((cmd: ClientCommand) => void) | null;
 
   pendingPermissions: Map<string, PermissionRequest>;
+  // Auto-approve all pending permissions without showing the dialog.
+  // Per-session only (resets on resetSession); not persisted to localStorage.
+  autoApprove: boolean;
 }
 
 export interface ChatStateActions {
@@ -97,6 +100,7 @@ export interface ChatStateActions {
   setThinkingLevel: (level: string) => void;
   registerSend: (send: (cmd: ClientCommand) => void) => void;
   respondToPermission: (requestId: string, optionId: string) => void;
+  setAutoApprove: (on: boolean) => void;
   resetSession: () => void;
 }
 
@@ -162,6 +166,7 @@ const initialState: ChatStateData = {
   lastError: null,
   sendCommand: null,
   pendingPermissions: new Map(),
+  autoApprove: false,
 };
 
 // Index of the assistant message the current turn is streaming into, or -1.
@@ -204,6 +209,9 @@ export const useChatStore = create<ChatState>()(
               // no longer resolve, so clear their pending state.
               if (state.pendingSelections.size > 0) {
                 set({ pendingSelections: new Map() });
+              }
+              if (state.pendingPermissions.size > 0) {
+                set({ pendingPermissions: new Map() });
               }
               if (state.activeTurnId !== null || state.promptRequestId !== null) {
                 set(clearTurnState);
@@ -630,13 +638,13 @@ export const useChatStore = create<ChatState>()(
       // holding a WebSocket reference itself.
       registerSend: (send) => set({ sendCommand: send }),
 
-      respondToPermission: (requestId) => {
-        // The actual permission_response is sent over the socket by the UI;
-        // the store only clears the pending prompt.
+      respondToPermission: (requestId, optionId) => {
         const newMap = new Map(get().pendingPermissions);
         newMap.delete(requestId);
         set({ pendingPermissions: newMap });
       },
+
+      setAutoApprove: (on) => set({ autoApprove: on }),
 
       resetSession: () =>
         set({
@@ -652,6 +660,8 @@ export const useChatStore = create<ChatState>()(
           activeMessageId: null,
           pendingSelections: new Map(),
           lastError: null,
+          pendingPermissions: new Map(),
+          autoApprove: false,
         }),
     }),
     { name: "RTAI Chat Store" },

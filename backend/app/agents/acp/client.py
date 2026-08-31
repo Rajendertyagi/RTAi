@@ -50,31 +50,29 @@ def create_client_class() -> type:
             fut = asyncio.get_event_loop().create_future()
             owner._pending_permissions[perm_id] = fut
 
-            await owner._send(
-                {
-                    "type": "permission_request",
-                    "permission_request_id": perm_id,
-                    "tool_call_id": tool_call_id_of(tool_call, f"tc-{perm_id}"),
-                    "options": [
-                        permission_option(o, i) for i, o in enumerate(options)
-                    ],
-                    **permission_tool_details(tool_call),
-                }
-            )
-            log_event(
-                logger,
-                logging.INFO,
-                "acp_permission_request",
-                permission=short_id(perm_id),
-            )
             try:
-                option_id = await asyncio.wait_for(fut, timeout=300.0)
+                await owner._send(
+                    {
+                        "type": "permission_request",
+                        "permission_request_id": perm_id,
+                        "tool_call_id": tool_call_id_of(tool_call, f"tc-{perm_id}"),
+                        "options": [
+                            permission_option(o, i) for i, o in enumerate(options)
+                        ],
+                        **permission_tool_details(tool_call),
+                    }
+                )
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "acp_permission_request",
+                    permission=short_id(perm_id),
+                )
+                option_id = await fut
                 # ACP RequestPermissionResponse is a discriminated union:
                 # selected + optionId, or cancelled. Anything else fails
                 # pydantic validation on the agent side and reads as reject.
                 return {"outcome": {"outcome": "selected", "optionId": option_id}}
-            except asyncio.TimeoutError:
-                return {"outcome": {"outcome": "cancelled"}}
             finally:
                 owner._pending_permissions.pop(perm_id, None)
 
