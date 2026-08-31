@@ -17,9 +17,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
-from .acp.prompt_content import PromptContent
+if TYPE_CHECKING:
+    from .acp.prompt_content import PromptContent
+
 from .capabilities import CapabilitySnapshot
 from .owned_process import OwnedProcess
 
