@@ -87,6 +87,11 @@ export interface ChatStateData {
   // Auto-approve all pending permissions without showing the dialog.
   // Per-session only (resets on resetSession); not persisted to localStorage.
   autoApprove: boolean;
+
+  // Accumulates streamed reasoning parts by (messageId → partId → text).
+  // Populated by part_start / part_delta / part_done events and consumed
+  // by convertMessage so assistant-ui can render them as reasoning parts.
+  reasoningParts: Map<string, Map<string, string>>;
 }
 
 export interface ChatStateActions {
@@ -167,6 +172,7 @@ const initialState: ChatStateData = {
   sendCommand: null,
   pendingPermissions: new Map(),
   autoApprove: false,
+  reasoningParts: new Map(),
 };
 
 // Index of the assistant message the current turn is streaming into, or -1.
@@ -216,6 +222,7 @@ export const useChatStore = create<ChatState>()(
               if (state.activeTurnId !== null || state.promptRequestId !== null) {
                 set(clearTurnState);
               }
+              set({ reasoningParts: new Map() });
             }
             break;
           }
@@ -531,6 +538,60 @@ export const useChatStore = create<ChatState>()(
             }
             break;
 
+          case "part_start":
+            // Signal the start of a new reasoning/text part. The frontend
+            // allocates an empty accumulator so part_delta events can
+            // append into it before part_done resolves the part.
+            if (
+              event.session_id === state.sessionId &&
+              event.turn_id === state.activeTurnId
+            ) {
+              const next = new Map(state.reasoningParts);
+              const parts = next.get(event.message_id) ?? new Map();
+              parts.set(event.part_id, "");
+              next.set(event.message_id, parts);
+              set({ reasoningParts: next });
+            }
+            break;
+
+          case "part_delta":
+            // Append streamed text into the matching part accumulator.
+            if (
+              event.session_id === state.sessionId &&
+              event.turn_id === state.activeTurnId
+            ) {
+              const byMsg = state.reasoningParts.get(event.message_id);
+              if (!byMsg) break;
+              const existing = byMsg.get(event.part_id) ?? "";
+              const next = new Map(byMsg);
+              next.set(event.part_id, existing + event.text);
+              const outer = new Map(state.reasoningParts);
+              outer.set(event.message_id, next);
+              set({ reasoningParts: outer });
+            }
+            break;
+
+          case "part_done":
+            // Part finished. If it was reasoning (empty group-id placeholder),
+            // drop the accumulator so convertMessage stops emitting it.
+            if (
+              event.session_id === state.sessionId &&
+              event.turn_id === state.activeTurnId
+            ) {
+              const byMsg = state.reasoningParts.get(event.message_id);
+              if (!byMsg) break;
+              const next = new Map(byMsg);
+              next.delete(event.part_id);
+              const outer = new Map(state.reasoningParts);
+              if (next.size === 0) {
+                outer.delete(event.message_id);
+              } else {
+                outer.set(event.message_id, next);
+              }
+              set({ reasoningParts: outer });
+            }
+            break;
+
           case "warning":
             // Diagnostics only — surfaced by toast/error UI elsewhere.
             console.warn("[RTAI]", event.type, event.message);
@@ -662,6 +723,7 @@ export const useChatStore = create<ChatState>()(
           lastError: null,
           pendingPermissions: new Map(),
           autoApprove: false,
+          reasoningParts: new Map(),
         }),
     }),
     { name: "RTAI Chat Store" },

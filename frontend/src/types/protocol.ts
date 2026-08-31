@@ -53,6 +53,10 @@ export type ServerEvent =
   | { type: "permission_result"; session_id: string; turn_id: string; permission_request_id: string; option_id?: string }
   // Commands
   | { type: "command_result"; request_id: string; command: string; success: boolean; code?: string; message?: string; effective_value?: unknown }
+  // Reasoning / chain-of-thought parts (streaming)
+  | { type: "part_start"; session_id: string; turn_id: string; message_id: string; part_id: string; part_type: "text" | "reasoning" }
+  | { type: "part_delta"; session_id: string; turn_id: string; message_id: string; part_id: string; text: string; sequence?: number }
+  | { type: "part_done"; session_id: string; turn_id: string; message_id: string; part_id: string }
   // Diagnostics
   | { type: "usage"; input_tokens?: number; output_tokens?: number }
   | { type: "queue_state"; pending: number }
@@ -181,6 +185,7 @@ export function isServerEvent(data: unknown): data is ServerEvent {
     "user_message", "delta", "done",
     "tool_start", "tool_update", "tool_result",
     "permission_request", "permission_result",
+    "part_start", "part_delta", "part_done",
     "command_result",
     "usage", "queue_state", "timing",
     "cancelled", "warning", "error", "raw",

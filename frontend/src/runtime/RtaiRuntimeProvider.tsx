@@ -25,6 +25,7 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const isRunning = useChatStore((s) => s.activeTurnId !== null);
   const sessionId = useChatStore((s) => s.sessionId);
   const turnId = useChatStore((s) => s.turnId);
+  const reasoningParts = useChatStore((s) => s.reasoningParts);
   const setConnected = useChatStore((s) => s.setConnected);
   const handleMessage = useChatStore((s) => s.handleMessage);
   const registerSend = useChatStore((s) => s.registerSend);
@@ -55,39 +56,50 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   // The adapter calls this; we pass raw messages + this converter (not
   // pre-converted messages), which is what ExternalStoreAdapter requires.
   const convertMessage = useCallback(
-    (msg: ChatMessage): ThreadMessageLike => ({
-      role: msg.role,
-      id: msg.id,
-      createdAt: new Date(msg.timestamp),
-      content:
-        msg.role === "user"
-          ? [{ type: "text" as const, text: msg.text }]
-          : [
-              { type: "text" as const, text: msg.text },
-              ...msg.tools.map((tool) => ({
-                type: "tool-call" as const,
-                toolName: tool.title ?? tool.kind ?? "tool",
-                toolCallId: tool.id,
-                args: tool.rawInput ?? {},
-                // Literal types on the values only — a whole-object `as const`
-                // would make every property readonly and stop matching the
-                // mutable part types assistant-ui expects.
-                status:
-                  tool.status === "running"
-                    ? { type: "running" as const }
-                    : tool.status === "error"
-                      ? { type: "incomplete" as const, reason: "error" as const }
-                      : { type: "complete" as const },
-                result:
-                  tool.status === "success"
-                    ? tool.content?.map((c: ToolContentBlock) =>
-                        c.type === "content" ? c.text : "",
-                      )[0]
-                    : undefined,
-              })),
-            ],
-    }),
-    [],
+    (msg: ChatMessage): ThreadMessageLike => {
+      // Build reasoning parts for this message from the accumulated store.
+      // Each part_id maps to the full concatenated text emitted by
+      // part_start / part_delta / part_done. assistant-ui treats these as
+      // "reasoning" parts that GroupedParts will group with tool-call parts
+      // under the ChainOfThought accordion.
+      const byMsg = reasoningParts.get(msg.id);
+      const reasoningPartsForMsg: Array<{ type: "reasoning"; text: string }> =
+        byMsg ? Array.from(byMsg.values()).map((text) => ({ type: "reasoning" as const, text })) : [];
+
+      return {
+        role: msg.role,
+        id: msg.id,
+        createdAt: new Date(msg.timestamp),
+        content:
+          msg.role === "user"
+            ? [{ type: "text" as const, text: msg.text }]
+            : [
+                ...reasoningPartsForMsg,
+                { type: "text" as const, text: msg.text },
+                ...msg.tools.map((tool) => ({
+                  type: "tool-call" as const,
+                  toolName: tool.title ?? tool.kind ?? "tool",
+                  toolCallId: tool.id,
+                  args: tool.rawInput ?? {},
+                  status:
+                    tool.status === "running"
+                      ? { type: "running" as const }
+                      : tool.status === "error"
+                        ? { type: "incomplete" as const, reason: "error" as const }
+                        : { type: "complete" as const },
+                  result:
+                    tool.status === "success"
+                      ? tool.content?.map((c: ToolContentBlock) =>
+                          c.type === "content" ? c.text : "",
+                        )[0]
+                      : undefined,
+                })),
+              ],
+      };
+    },
+    // Include reasoningParts so convertMessage re-runs whenever reasoning
+    // parts are updated (part_delta fires frequently during streaming).
+    [reasoningParts],
   );
 
   // Create the runtime
