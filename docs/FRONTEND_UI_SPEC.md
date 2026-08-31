@@ -325,7 +325,12 @@ disabled-with-reason when unavailable. No control is hardcoded to any provider.
 - Width: `w-11` (44px) fixed, `flex h-full flex-shrink-0 flex-col items-center gap-1 bg-background py-2`
 - Contains icon buttons (36x36px, `h-9 w-9`). Active icon: `text-primary`; inactive:
   `text-muted-foreground hover:text-foreground`.
+- Icons open corresponding context-panel content; runtime availability determines
+  which actions are shown. No hardcoded provider-specific actions.
+- Keyboard-accessible buttons with labels/tooltips.
 - Configuration button at bottom for surface order (deferred).
+- Initial rail actions use a fixed order. User drag-reordering is a later
+  customization milestone and does not alter the current shell contract.
 
 ### Context panel
 
@@ -387,6 +392,10 @@ surface registry exists yet. This section defines the target shape.
 - StatusBar text: "Disconnected" when not ready.
 - Send button: disabled with visible reason text; prompts are **never silently dropped**.
 - Selection failures: shown in StatusBar as truncated red text, not swallowed.
+- Current feedback is inline: composer errors for selection/send failures,
+  connection/status indicators near the composer or status region. All feedback
+  is accessible text, not color alone. Toast notifications remain a future
+  shared feedback layer and are not required for the current milestone.
 
 ## 12. Acceptance criteria
 
@@ -454,14 +463,20 @@ surface registry exists yet. This section defines the target shape.
 - Attachment support in composer (adapter-dependent; server adapter not yet exposed)
 - Scroll-to-bottom button (measured OpenChamber behavior; implement if simple)
 
-### Out of scope (never in this spec)
+### Deferred future work
+
+- Message timestamps (hover-revealed on message bubbles)
+- Message context menu (copy, select-all)
+- Conversation export (markdown transcript; requires export contract)
+- Toast/notification system (future shared feedback layer)
+- Right-rail icon actions (context-panel surface triggers; deferred until surface registry exists)
+- Drag-reordering right-rail icons (customization milestone; fixed order is current contract)
+
+### Permanently out of scope
 
 - Focus mode (hide sidebar, expand composer)
 - Full-screen mobile composer with drag handle
 - Conversation timeline / turn navigation rail
 - Work status panel (context usage, subagent cost)
 - Skeleton-loading systems
-- Toast-notification system
-- Drag-reordering right-rail icons
 - Provider-specific hardcoded controls
-- Message export menus, hover timestamps, or context menus
