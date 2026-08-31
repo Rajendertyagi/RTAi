@@ -316,7 +316,7 @@ class AcpSession(AgentAdapter):
         )
         await self._connection.prompt(
             session_id=self._session_id,
-            prompt=blocks,  # type: ignore[arg-type]
+            prompt=blocks,
         )
         log_event(
             logger,

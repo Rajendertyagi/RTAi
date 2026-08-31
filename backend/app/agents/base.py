@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from .acp.prompt_content import PromptContent
 from .capabilities import CapabilitySnapshot
 from .owned_process import OwnedProcess
 
@@ -50,6 +51,14 @@ class AgentAdapter(ABC):
     @abstractmethod
     async def submit_prompt(self, text: str) -> None:
         """Send one user prompt; results arrive through the emit sink."""
+
+    @abstractmethod
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+        """Send a multi-block prompt with validated attachments.
+
+        Adapters that cannot accept attachments should raise a clear error;
+        callers gate on the advertised attachment capabilities first.
+        """
 
     @abstractmethod
     async def cancel(self) -> None:

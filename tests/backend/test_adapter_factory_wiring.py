@@ -37,6 +37,9 @@ class FakeAdapter(AgentAdapter):
         if self.prompt_behavior == "explode":
             raise RuntimeError("provider exploded")
 
+    async def submit_prompt_content(self, content: list[Any]) -> None:
+        pass
+
     async def cancel(self) -> None:
         self.cancelled = True
 

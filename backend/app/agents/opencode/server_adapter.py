@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ...logging_config import log_event, short_id
+from ..acp.prompt_content import PromptContent
 from ..base import AgentAdapter, Emit, SelectionResult
 from ..capabilities import (
     AgentDescriptor,
@@ -485,6 +486,14 @@ class OpenCodeServerAdapter(AgentAdapter):
             json_body=body,
         )
         # prompt_async responds 204; streaming arrives via the event stream.
+
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+        # The OpenCode server adapter never advertises attachment support
+        # (attachments are reported as UnavailableCapability), so this path is
+        # unreachable from the frontend. Raise a clear error if invoked anyway.
+        raise NotImplementedError(
+            "OpenCode server adapter does not support attachment prompts"
+        )
 
     async def cancel(self) -> None:
         if not self._session_id:

@@ -76,6 +76,9 @@ class StreamingFakeAdapter(AgentAdapter):
         await self._emit({"type": "delta", "text": SECRET_DELTA})
         await self._emit({"type": "done"})
 
+    async def submit_prompt_content(self, content: list[Any]) -> None:
+        pass
+
     async def cancel(self) -> None:
         pass
 

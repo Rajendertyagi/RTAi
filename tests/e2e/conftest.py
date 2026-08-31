@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -163,6 +164,9 @@ def server_url():
                     await asyncio.sleep(0.04)
                 if not self._cancelled:
                     await self._emit({"type": "done", "reason": "completed"})
+
+            async def submit_prompt_content(self, content: list[Any]) -> None:
+                pass
 
             async def cancel(self) -> None:
                 self._cancelled = True

@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 from app.agents.base import AgentAdapter, Emit, SelectionResult
@@ -45,6 +46,9 @@ class FakeAdapter(AgentAdapter):
         return self._snap
 
     async def submit_prompt(self, text: str) -> None:
+        pass
+
+    async def submit_prompt_content(self, content: list[Any]) -> None:
         pass
 
     async def cancel(self) -> None:

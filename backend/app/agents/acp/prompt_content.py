@@ -132,6 +132,19 @@ def _validate_mime_type(kind: PromptKind, mime_type: str | None) -> str | None:
     return mime_type
 
 
+def _coerce_mime_type(kind: PromptKind, value: object) -> str | None:
+    """Validate a raw ``mime_type`` value from a JSON dict into a normalized str.
+
+    Accepts ``None`` or a string; anything else is rejected. Delegates the
+    allowlist/emptiness checks to :func:`_validate_mime_type`.
+    """
+    if value is None:
+        return _validate_mime_type(kind, None)
+    if not isinstance(value, str):
+        raise PromptValidationError(f"{kind.value} mime_type must be a string")
+    return _validate_mime_type(kind, value)
+
+
 def _decode_base64(data: str, label: str) -> bytes:
     if not data:
         raise PromptValidationError(f"{label} must not be empty")
@@ -215,7 +228,7 @@ def make_prompt_content(data: dict[str, object]) -> PromptContent:
             raise PromptValidationError("image kind requires data_base64")
         if "text" in data or "uri" in data:
             raise PromptValidationError("image kind must not have text or uri")
-        mime = _validate_mime_type(kind, data.get("mime_type"))
+        mime = _coerce_mime_type(kind, data.get("mime_type"))
         decoded = _decode_base64(b64, "image data_base64")
         return PromptContent(
             kind=kind,
@@ -232,7 +245,7 @@ def make_prompt_content(data: dict[str, object]) -> PromptContent:
             raise PromptValidationError("audio kind requires data_base64")
         if "text" in data or "uri" in data:
             raise PromptValidationError("audio kind must not have text or uri")
-        mime = _validate_mime_type(kind, data.get("mime_type"))
+        mime = _coerce_mime_type(kind, data.get("mime_type"))
         decoded = _decode_base64(b64, "audio data_base64")
         return PromptContent(
             kind=kind,
@@ -250,13 +263,11 @@ def make_prompt_content(data: dict[str, object]) -> PromptContent:
         if "text" in data or "data_base64" in data:
             raise PromptValidationError("resource_link kind must not have text or data_base64")
         validated_uri = _validate_uri(uri, kind)
-        mime = data.get("mime_type")
-        if mime and not isinstance(mime, str):
-            raise PromptValidationError("resource_link mime_type must be a string")
+        mime = _coerce_mime_type(kind, data.get("mime_type"))
         return PromptContent(
             kind=kind,
             name=name,
-            mime_type=mime.strip().lower() if isinstance(mime, str) and mime.strip() else None,
+            mime_type=mime,
             text=None,
             data=None,
             uri=validated_uri,
@@ -268,7 +279,7 @@ def make_prompt_content(data: dict[str, object]) -> PromptContent:
             raise PromptValidationError("embedded_text kind requires text")
         if "data_base64" in data or "uri" in data:
             raise PromptValidationError("embedded_text kind must not have data_base64 or uri")
-        mime = _validate_mime_type(kind, data.get("mime_type"))
+        mime = _coerce_mime_type(kind, data.get("mime_type"))
         return PromptContent(
             kind=kind,
             name=name,
@@ -284,7 +295,7 @@ def make_prompt_content(data: dict[str, object]) -> PromptContent:
             raise PromptValidationError("embedded_blob kind requires data_base64")
         if "text" in data or "uri" in data:
             raise PromptValidationError("embedded_blob kind must not have text or uri")
-        mime = _validate_mime_type(kind, data.get("mime_type"))
+        mime = _coerce_mime_type(kind, data.get("mime_type"))
         decoded = _decode_base64(b64, "embedded_blob data_base64")
         return PromptContent(
             kind=kind,
