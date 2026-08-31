@@ -54,10 +54,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   };
 
   return (
-    <aside
-      id="app-sidebar"
-      className={`w-[clamp(14rem,18vw,18rem)] bg-sidebar text-sidebar-foreground border-r border-border flex flex-col shrink-0 overflow-hidden max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(85vw,20rem)] max-md:transition-transform max-md:duration-200 max-md:shadow-xl ${open ? "max-md:translate-x-0" : "max-md:-translate-x-full"}`}
-    >
+    <>
+      <aside
+        id="app-sidebar"
+        className={`w-[clamp(14rem,18vw,18rem)] bg-sidebar text-sidebar-foreground border-r border-border flex flex-col shrink-0 overflow-hidden max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(85vw,20rem)] max-md:transition-transform max-md:duration-200 max-md:shadow-xl ${open ? "max-md:translate-x-0" : "max-md:-translate-x-full"}`}
+      >
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
         <h1 className="text-xl font-semibold m-0 p-0">RTAI</h1>
@@ -111,12 +112,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       </div>
     </aside>
 
-    {open && (
-      <div
-        className="fixed inset-0 z-30 bg-foreground/50 md:hidden"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-    )}
+      {open && (
+        <div
+          className="fixed inset-0 z-30 bg-foreground/50 md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+    </>
   );
 }
