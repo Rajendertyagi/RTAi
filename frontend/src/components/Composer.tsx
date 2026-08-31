@@ -10,7 +10,17 @@ import { CapabilityControls } from "./CapabilitySelectors";
 
 export function Composer() {
   const aui = useAui();
-  const isRunning = useChatStore((s) => s.activeTurnId !== null);
+  // Show Stop as soon as a dispatch is in flight — whether the turn has
+  // started streaming (activeTurnId) or we're still waiting for the backend
+  // to acknowledge (promptRequestId or cancelPending). This avoids the
+  // previous race where a hang before the user_message echo left the user
+  // with no way to stop the request.
+  const isRunning = useChatStore(
+    (s) =>
+      s.activeTurnId !== null ||
+      s.promptRequestId !== null ||
+      s.cancelPending,
+  );
   const handleCancel = () => aui.thread().cancelRun();
 
   return (

@@ -528,15 +528,24 @@ export const useChatStore = create<ChatState>()(
             break;
 
           case "error":
-            // A terminal error for the current turn clears its pending state.
-            // Errors without a matching turn (or without turn correlation) are
-            // diagnostics only.
+            // A terminal error for the current turn clears its pending state
+            // and surfaces the message as `lastError` so the StatusBar can
+            // display it. Diagnostic errors without turn correlation are
+            // logged; errors that carry a known backend code but no turn
+            // (e.g. `history_degraded`) are surfaced so the user sees why.
             console.warn("[RTAI]", event.type, event.message);
             if (
               event.session_id === state.sessionId &&
               event.turn_id === state.turnId
             ) {
-              set(clearTurnState);
+              set({
+                ...clearTurnState,
+                lastError: { code: event.code, message: event.message },
+              });
+            } else if (!event.code) {
+              // No turn correlation and no code — surface it as a standalone
+              // error rather than silently swallowing it.
+              set({ lastError: { code: event.code, message: event.message } });
             }
             break;
         }

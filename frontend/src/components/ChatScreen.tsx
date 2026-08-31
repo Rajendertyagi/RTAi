@@ -100,7 +100,7 @@ export function ChatScreen({
           </div>
 
           <ThreadPrimitive.ViewportFooter
-            className="sticky bottom-0 z-10 w-full min-w-0 bg-background"
+            className="sticky bottom-0 z-10 mt-auto w-full min-w-0 bg-background"
             data-testid="thread-viewport-footer"
           >
             <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
