@@ -1,7 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class MCPServerConfig:
+    """Configuration for an MCP server to attach to an ACP session.
+
+    The ACP spec passes MCP server definitions at ``session/create`` time.
+    RTAI owns the subprocess lifecycle here: the server is started by the
+    factory and torn down when the adapter closes.
+    """
+
+    name: str
+    command: str
+    args: tuple[str, ...] = field(default_factory=tuple)
+    env: dict[str, str] | None = None
+    cwd: str | None = None
 
 
 def resolve_project_path(value: str | None) -> Path:

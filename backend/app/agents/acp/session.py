@@ -26,9 +26,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ...core.protocol import acp_chunk_kind, jsonable_model, text_from_acp_chunk
+from ...core.protocol import (
+    MCPServerConfig,
+    acp_chunk_kind,
+    jsonable_model,
+    text_from_acp_chunk,
+)
 from ...logging_config import log_event, short_id
 from ..base import AgentAdapter, Emit, SelectionKind, SelectionResult
+from ..suggestions import AbstractSuggestionEvaluator, SuggestionEventBus, TurnContext
 from ..capabilities import (
     AgentDescriptor,
     AttachmentCapabilities,
@@ -109,6 +115,13 @@ class AcpSession(AgentAdapter):
         self._open_part_id: str | None = None
         self._open_part_kind: str | None = None
         self._part_seq = 0
+        # Suggestions pipeline — injected by the WebSocket route after
+        # adapter creation. Default no-op keeps the path safe for adapters
+        # that do not use it (e.g. the HTTP+SSE server adapter).
+        self._suggestions = SuggestionEventBus()
+        # Optional MCP servers to attach at session creation time.
+        # Passed through to ACP new_session() when present.
+        self._mcp_servers: list[MCPServerConfig] | None = None
 
     async def start(self, cwd: Path, emit: Emit) -> None:
         try:
@@ -156,7 +169,23 @@ class AcpSession(AgentAdapter):
             init_response = await self._connection.initialize(protocol_version=PROTOCOL_VERSION)
             self._capture_agent_identity(init_response)
             self._capabilities.ingest_prompt_capabilities(jsonable_model(init_response))
-            session = await self._connection.new_session(cwd=str(cwd), mcp_servers=[])
+            session = await self._connection.new_session(
+                cwd=str(cwd),
+                mcp_servers=(
+                    [
+                        {
+                            "name": s.name,
+                            "command": s.command,
+                            "args": list(s.args),
+                            "env": s.env or {},
+                            "cwd": s.cwd or "",
+                        }
+                        for s in self._mcp_servers
+                    ]
+                    if self._mcp_servers
+                    else []
+                ),
+            )
             self._session_id = session.session_id
             self._initialized = True
             self._owned.attach_session(self._session_id or "")
@@ -203,9 +232,9 @@ class AcpSession(AgentAdapter):
             "acp_turn_completed",
             session=short_id(self._session_id),
         )
-        # The turn is over, so whatever part was streaming is finished too.
         await self._close_open_part()
         await self._send({"type": "done"})
+        self._fire_suggestions(text)
 
     async def submit_prompt_content(self, content: list[PromptContent]) -> None:
         """Send a multi-block prompt with validated attachments.
@@ -326,6 +355,7 @@ class AcpSession(AgentAdapter):
         )
         await self._close_open_part()
         await self._send({"type": "done"})
+        self._fire_suggestions("")
 
     async def cancel(self) -> None:
         if self._connection and self._session_id:
@@ -363,6 +393,25 @@ class AcpSession(AgentAdapter):
 
     def owned_process(self) -> OwnedProcess | None:
         return self._owned
+
+    def set_suggestions_evaluator(self, evaluator: AbstractSuggestionEvaluator | None) -> None:
+        """Inject a suggestion evaluator at runtime (called by the WebSocket route)."""
+        self._suggestions.set_evaluator(evaluator or NoOpSuggestionEvaluator())
+
+    def _fire_suggestions(self, user_text: str) -> None:
+        """Build a TurnContext and fire the suggestion bus after a turn completes."""
+        if not self._initialized or not user_text.strip():
+            return
+        ctx = TurnContext(
+            session_id=self._session_id or "",
+            turn_id="",
+            message_id="",
+            user_text=user_text,
+            agent_name=self._agent_title or self._agent_name or "agent",
+            tool_call_count=len(self._seen_tool_calls),
+            part_kinds=[],
+        )
+        self._suggestions.fire_on_turn_completed(ctx)
 
     async def respond_to_permission(self, permission_request_id: str, option_id: str) -> bool:
         """Resolve a pending permission request with the user's choice.

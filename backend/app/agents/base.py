@@ -75,10 +75,25 @@ class AgentAdapter(ABC):
         return None
 
     # ------------------------------------------------------------------
-    # Extension points - implemented in Phase 2A-B (runtime discovery and
-    # selection). Deliberately unimplemented here so no phase pretends to
-    # support something the adapter does not actually do yet.
+    # Suggestions pipeline — injected by the WebSocket route after adapter
+    # creation. Adapters that support it call fire_suggestions() at the end
+    # of each turn; the bus runs the registered evaluator in the background.
     # ------------------------------------------------------------------
+
+    def set_suggestions_evaluator(self, evaluator: Any) -> None:
+        """Inject a :class:`AbstractSuggestionEvaluator` at runtime.
+
+        The default no-op implementation means servers that do not yet use
+        the suggestions pipeline (e.g. the HTTP+SSE adapter) remain
+        unaffected. AcpSession overrides this to wire the bus.
+        """
+
+    def fire_suggestions(self, ctx: Any) -> None:
+        """Signal that the current turn has completed.
+
+        The default no-op means adapters that do not support the pipeline
+        remain unaffected. AcpSession overrides this to delegate to the bus.
+        """
 
     async def select(self, kind: SelectionKind, value_id: str) -> SelectionResult:
         raise NotImplementedError("Capability selection arrives in Phase 2A-B.")

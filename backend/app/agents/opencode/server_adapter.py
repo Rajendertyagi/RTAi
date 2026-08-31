@@ -40,9 +40,11 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
+from ...core.protocol import MCPServerConfig
 from ...logging_config import log_event, short_id
 from ..acp.prompt_content import PromptContent
 from ..base import AgentAdapter, Emit, SelectionResult
+from ..suggestions import SuggestionEventBus
 from ..capabilities import (
     AgentDescriptor,
     CapabilitySection,
@@ -178,6 +180,11 @@ class OpenCodeServerAdapter(AgentAdapter):
         self._open_part_kind: str | None = None
         # Tool call ids already announced this turn (first sighting => tool_start).
         self._seen_tool_calls: set[str] = set()
+        # Suggestions pipeline — injected by the WebSocket route after
+        # adapter creation. No-op for the HTTP+SSE adapter (no turn context).
+        self._suggestions = SuggestionEventBus()
+        # Optional MCP servers to attach at session creation time.
+        self._mcp_servers: list[MCPServerConfig] | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -624,6 +631,12 @@ class OpenCodeServerAdapter(AgentAdapter):
             self._stream_task = None
         await self._shutdown_owned()
 
+    def set_suggestions_evaluator(self, evaluator: Any) -> None:
+        """No-op: the HTTP+SSE server adapter does not support the suggestions pipeline."""
+
+    def fire_suggestions(self, ctx: Any) -> None:
+        """No-op: the HTTP+SSE server adapter does not support the suggestions pipeline."""
+
     # -- internals --------------------------------------------------------------
 
     def _headers(self) -> dict[str, str]:
@@ -803,6 +816,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                 if emitter is not None:
                     await self._close_open_part()
                     await emitter({"type": "done"})
+                    self.fire_suggestions(None)
             return True
 
         if event_type == "session.error":

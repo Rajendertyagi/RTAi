@@ -283,6 +283,7 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 session_id=session_id,
                 turn_id=turn_ctx.get("turn_id"),
                 sequence=delta_seq,
+                message_id=turn_ctx.get("message_id"),
             )
         else:
             # No active turn yet (status/capability/error frames): keep the
@@ -432,6 +433,11 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
 
     adapter: AgentAdapter = websocket.app.state.adapter_factory.create()
     prompt_task: asyncio.Task | None = None
+    # Suggestions bus — attached to the adapter so each turn can fire
+    # non-blocking follow-up evaluation after completion.
+    from ..agents.suggestions import SuggestionEventBus
+    suggestions_bus = SuggestionEventBus()
+    adapter.set_suggestions_evaluator(suggestions_bus)
 
     try:
         # Create the database session now that the project path and adapter

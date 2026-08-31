@@ -130,6 +130,7 @@ def normalize_emission(
     session_id: str,
     turn_id: str | None,
     sequence: int,
+    message_id: str | None = None,
 ) -> dict[str, Any]:
     """Wrap an adapter emission with the Protocol v1 envelope.
 
@@ -150,6 +151,10 @@ def normalize_emission(
     # Inject sequence for delta events if absent.
     if frame.get("type") == "delta" and "sequence" not in frame:
         frame["sequence"] = sequence
+    # Inject message_id for part events so the frontend can correlate
+    # reasoning/text parts to the assistant message they belong to.
+    if message_id is not None:
+        frame["message_id"] = message_id
     return frame
 
 
