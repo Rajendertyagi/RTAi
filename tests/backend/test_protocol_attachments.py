@@ -452,8 +452,8 @@ class ProtocolAttachmentTests(unittest.IsolatedAsyncioTestCase):
         try:
             with client.websocket_connect("/ws?cwd=/tmp") as ws:
                 _read_until_ready(ws)
-                # Send a 6 MiB image (exceeds 5 MiB limit)
-                big_b64 = "x" * (6 * 1024 * 1024)
+                # Send a ~7 MiB base64 image that decodes to >5 MiB (exceeds limit)
+                big_b64 = "x" * (7 * 1024 * 1024)
                 ws.send_json(
                     {
                         "protocol_version": 1,
