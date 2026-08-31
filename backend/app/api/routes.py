@@ -25,7 +25,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from ..agents.base import AgentAdapter
-from ..agents.acp.prompt_content import PromptContent
 from ..agents.capabilities import AttachmentCapabilities, SessionCapabilities
 from ..core.protocol import resolve_project_path
 from ..history.errors import CursorValidationError
