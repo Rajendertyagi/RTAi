@@ -200,11 +200,14 @@ sequence | discriminator`, where:
 
 This guarantees that legitimate separate events never collapse (multiple tool
 calls in a turn, repeated tool updates, and repeated part deltas are all
-preserved), while a retry of the same persistence operation reuses the same
-key and deduplicates. Occurrence values are assigned once, before the database
-write, and are persistence-only — they are never exposed on the WebSocket
-wire. Atomic per-session ordering is provided by the repository-assigned
-`event_ordinal`, independent of the identity key.
+preserved). Re-appending the same `event_key` for a session deduplicates
+(idempotent no-op), but separate persistence calls produce separate events:
+for occurrence-based families (`part_delta`, `tool_update`) each call
+increments the session-local counter and yields a new key, so there is no
+cross-call retry-key reuse. Occurrence values are assigned once, before the
+database write, and are persistence-only — they are never exposed on the
+WebSocket wire. Atomic per-session ordering is provided by the
+repository-assigned `event_ordinal`, independent of the identity key.
 
 > **Limitation:** events already lost to the earlier collision behavior (when
 > the key omitted the discriminator/occurrence) cannot be reconstructed from

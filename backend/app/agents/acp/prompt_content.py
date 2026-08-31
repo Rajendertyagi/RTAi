@@ -106,9 +106,13 @@ def _validate_name(name: str) -> str:
 
 def _validate_mime_type(kind: PromptKind, mime_type: str | None) -> str | None:
     if mime_type is None:
+        if kind in (PromptKind.IMAGE, PromptKind.AUDIO):
+            raise PromptValidationError(f"{kind.value} kind requires a non-empty mime_type")
         return None
     mime_type = mime_type.strip().lower()
     if not mime_type:
+        if kind in (PromptKind.IMAGE, PromptKind.AUDIO):
+            raise PromptValidationError(f"{kind.value} kind requires a non-empty mime_type")
         return None
     # Inline image/audio: must match known prefix
     if kind in (PromptKind.IMAGE, PromptKind.AUDIO):

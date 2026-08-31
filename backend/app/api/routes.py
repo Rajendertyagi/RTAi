@@ -220,8 +220,11 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
             return
         # Identity: the protocol sequence where one exists, otherwise a
         # deterministic session-local occurrence value for families that
-        # repeat without a wire sequence. Computed here, before the DB write,
-        # so a retry of the same operation reuses the same key.
+        # repeat without a wire sequence. The occurrence is assigned once per
+        # call, before the DB write. Re-appending the same event_key dedupes,
+        # but re-invoking this for an occurrence-based family (part_delta,
+        # tool_update) increments the counter and yields a NEW key — there is
+        # no cross-call retry-key reuse for those families.
         sequence = frame.get("sequence")
         if event_type == "part_delta":
             part_key = (str(frame.get("turn_id") or ""), str(frame.get("part_id") or ""))

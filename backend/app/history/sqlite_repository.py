@@ -20,6 +20,7 @@ three files consistently (see docs/ARCHITECTURE.md).
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import sqlite3
 import time
@@ -58,13 +59,30 @@ def _decode_cursor(cursor: str | None) -> list[str] | None:
     Returns ``None`` for an empty/absent cursor (first page). Any non-empty
     malformed cursor raises :class:`CursorValidationError`; it is never
     silently treated as the first page.
+
+    Only the canonical URL-safe alphabet produced by :func:`_encode_cursor`
+    is accepted: standard ``+``/``/`` characters, non-ASCII input, invalid
+    padding/length, and non-canonical encodings are all rejected. No raw
+    decoder error message ever escapes as a :class:`CursorValidationError`.
     """
     if not cursor:
         return None
+    # The encoder emits only the URL-safe alphabet (``A-Za-z0-9-_`` plus
+    # ``=`` padding). Reject the standard ``+``/``/`` variants up front.
+    if "+" in cursor or "/" in cursor:
+        raise CursorValidationError("cursor is not valid base64")
     try:
-        raw = base64.urlsafe_b64decode(cursor.encode("ascii"), validate=True)
-    except (ValueError, UnicodeEncodeError) as exc:
+        encoded = cursor.encode("ascii")
+    except UnicodeEncodeError as exc:
         raise CursorValidationError("cursor is not valid base64") from exc
+    try:
+        raw = base64.b64decode(encoded, altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError, UnicodeEncodeError) as exc:
+        raise CursorValidationError("cursor is not valid base64") from exc
+    # Require the canonical encoding: re-encoding the decoded bytes must
+    # reproduce the input exactly (the encoder includes ``=`` padding).
+    if base64.urlsafe_b64encode(raw).decode("ascii") != cursor:
+        raise CursorValidationError("cursor is not valid base64")
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
