@@ -3,7 +3,7 @@ import { isServerEvent, type ClientCommand, type ServerEvent } from "../types/pr
 
 interface UseRtaiSocket {
   connect: (cwd?: string) => void;
-  send: (command: ClientCommand) => void;
+  send: (command: ClientCommand) => boolean;
   close: () => void;
   connected: boolean;
 }
@@ -84,11 +84,13 @@ export function useRtaiSocket(onEvent: (event: ServerEvent) => void): UseRtaiSoc
     };
   }, []);
 
-  const send = useCallback((command: ClientCommand) => {
+  const send = useCallback((command: ClientCommand): boolean => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(command));
+      return true;
     }
+    return false;
   }, []);
 
   const close = useCallback(() => {

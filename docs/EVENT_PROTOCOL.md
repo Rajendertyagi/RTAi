@@ -47,8 +47,13 @@ correlation fields. The frontend mirror of these shapes lives in
    tool activity, permissions). Frames naming a different session than the
    active one must not mutate UI state.
 2. `turn_id` is required on all prompt/generation events. Response-window
-   events (`delta`, `done`, `tool_*`) apply only when their turn matches the
-   active turn.
+   events (`delta`, `tool_*`) apply only when their turn matches the active
+   turn. Terminal events (`done` including `reason: "cancelled"`, `error`, and
+   the legacy `cancelled`) clear pending state only when **both**
+   `session_id` and `turn_id` match the stable current turn's
+   `sessionId`/`turnId` (pending/active), not only `activeTurnId` — so
+   cancellation works before `user_message` establishes `activeTurnId`; a late
+   terminal event from an older turn is ignored.
 3. `message_id` is required on user and assistant messages.
 4. Streaming events carry an increasing `sequence`; deltas with a sequence ≤
    the last applied one are duplicates and must not append text.
@@ -58,7 +63,10 @@ correlation fields. The frontend mirror of these shapes lives in
    selections.
 7. `command_result` correlation uses `request_id`; message storage and
    deduplication use `message_id`; turn streaming and cancellation use
-   `turn_id`.
+   `turn_id`. A cancel `command_result` with `success: false` clears only
+   `cancelPending`/`cancelError` and retains the active prompt state; a
+   successful cancel keeps the turn correlated until its matching terminal
+   `done` arrives.
 
 ## Identifier contract
 
@@ -71,25 +79,36 @@ Every identifier has exactly one purpose and is never encoded inside another:
 | `message_id` | Unique identity for one logical message. Never reused as a command `request_id`. |
 | `request_id` | Unique correlation identity for one protocol command. Prompt and cancel commands receive different request IDs. |
 
-Identifiers are UUIDs generated with `crypto.randomUUID()` in the frontend.
-They are never built from `Date.now()` and turn/message identity is never
-appended to `session_id`.
+Identifiers are UUIDs generated through a single centralized `generateId()`
+helper backed by `crypto.randomUUID()` in the frontend (`frontend/src/state/chatStore.ts`).
+No call site builds identifiers from `Date.now()` and turn/message identity is
+never appended to `session_id`. Every identity in a prompt — `session_id`
+(stable), `turn_id`, `message_id`, prompt `request_id` — and every cancel's own
+`request_id` is a distinct UUID.
 
-## Conversation session vs. server history id
+## Conversation session vs. server history id vs. adapter ACP session
 
-The frontend owns the stable conversation `session_id` (one per chat, reused
-for every turn). The backend independently assigns a server `rtai_session_id`
-per WebSocket connection for history persistence (`GET /api/sessions/...`).
-These are distinct identities with different owners:
+Three identities coexist and must not be confused:
 
-- `session_id` — client-owned logical conversation identity, carried on the
-  wire and used for UI correlation.
-- `rtai_session_id` — backend-owned history identity, generated on accept,
-  never derived from the client `session_id`, and used only for the SQLite
-  transcript store.
+- `session_id` — **frontend logical conversation** identity, owned by the UI,
+  UUID via `generateId()`, stable for the whole chat, carried on the wire and
+  used for UI turn correlation (`frontend/src/state/chatStore.ts` + `RtaiRuntimeProvider.tsx`).
+- `rtai_session_id` — **backend history** identity, owned by the server,
+  generated on WebSocket accept, never derived from the client `session_id`,
+  used only as the SQLite transcript key (`GET /api/sessions/...`).
+- ACP `sessionId` — **adapter-native ACP session** identity, owned by the
+  OpenCode ACP/server adapter, created during `initialize`/`new_session` inside
+  `backend/app/agents/acp/session.py`, never exposed on the RTAI wire; the
+  RTAI backend maps its logical `session_id`/`turn_id` envelope to this native
+  `sessionId` only inside the adapter.
 
-The two are not interchangeable; the UI never sends `rtai_session_id` and the
-backend never uses the client `session_id` as a history key.
+No identity is derived from or embedded in another. The UI never sends
+`rtai_session_id` or the adapter's ACP `sessionId`; the backend never uses the
+client `session_id` as a history key nor as the ACP `sessionId`.
+
+## ACP boundary
+
+The official ACP `session/cancel` (https://agentclientprotocol.com/protocol/v1/prompt-turn and /schema) is a **notification containing only `sessionId`**: it cancels whatever work is ongoing for that ACP session and causes the active `session/prompt` to finish with `StopReason::Cancelled`. RTAI's additional wire fields — `request_id`, `turn_id`, `message_id`, and the `command_result` acknowledgement for `cancel` — are **RTAI-specific wrapper features**, not ACP fields. The RTAI backend validates the RTAI `session_id`/`turn_id` envelope first and forwards to the adapter's ACP `cancel()` only when the target matches the exact active RTAI turn; ACP itself has no turn-level identity.
 
 ## Agents
 
@@ -620,12 +639,27 @@ Violations return a normalized `command_result` with `success: false`.
 - Raw attachment content is never persisted in history — only kind, name,
   MIME type, and decoded byte size are stored.
 
-Cancel identifies the exact session and turn. The backend cancels only when
-the cancel's `session_id` and `turn_id` match the active turn; a stale or
-mismatched cancel (or a cancel with no turn in flight) is a safe idempotent
-no-op that never cancels a newer/different turn. Every cancel command receives
-one correlated `command_result` using its own `request_id`, and a successful
-cancellation terminates with exactly one `done {reason: "cancelled"}`.
+Cancel identifies the exact RTAI turn (`session_id` + `turn_id`) before any
+ACP cancellation is forwarded (see ACP boundary above). Every cancel command
+carries its own fresh `request_id` and receives one correlated
+`command_result` using that `request_id`. The backend:
+
+- forwards to the adapter's ACP `cancel()` **once** only when the cancel targets
+  the exact active RTAI turn (first matching cancel → `success: true`);
+- treats a duplicate cancel for the same already-cancelling turn as an
+  idempotent successful acknowledgement without calling the adapter again;
+- treats a cancel for the exact most-recently terminal turn as a safe
+  successful no-op;
+- rejects honestly with `success: false` (`turn_not_active` / `turn_mismatch`)
+  for a different session, different turn, unknown turn, or no relevant turn,
+  and cancels nothing. Mismatches are never reported as `success: true`.
+
+A successful cancellation terminates with exactly one
+`done {session_id, turn_id, reason: "cancelled"}`; the backend emits no
+separate `cancelled` frame and no generic handler `error` after a successful
+cancellation. The frontend correlates that terminal `done` by matching both the
+stable `sessionId` and the pending/active `turnId` (not only `activeTurnId`,
+so cancellation works before `user_message` establishes `activeTurnId`).
 
 > **Limitation:** only one turn is active per WebSocket. A second prompt while
 > another turn is active is rejected honestly with a failed `command_result`

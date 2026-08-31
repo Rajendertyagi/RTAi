@@ -6,7 +6,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
-import { useChatStore, type ChatMessage } from "../state/chatStore";
+import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
 import { useRtaiSocket } from "../hooks/useRtaiSocket";
 import type { ClientCommand, ToolContentBlock } from "../types/protocol";
 
@@ -28,7 +28,7 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const registerSend = useChatStore((s) => s.registerSend);
 
   // WebSocket hook — declared before use in the runtime callbacks below.
-  const socketRef = useRef<{ send: (cmd: ClientCommand) => void } | null>(null);
+  const socketRef = useRef<{ send: (cmd: ClientCommand) => boolean } | null>(null);
   const socket = useRtaiSocket((event) => {
     handleMessage(event);
     if (event.type === "status") {
@@ -102,9 +102,9 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
       // turn in one chat. Each prompt gets its own distinct turn_id,
       // message_id and request_id — none is derived from or embedded in the
       // session id, and request_id is never reused as message_id.
-      const newTurnId = crypto.randomUUID();
-      const newMessageId = crypto.randomUUID();
-      const newRequestId = crypto.randomUUID();
+      const newTurnId = generateId();
+      const newMessageId = generateId();
+      const newRequestId = generateId();
 
       // Update store with the new turn's identities. The session id is NOT
       // changed here — it stays stable for the whole conversation. In-flight
@@ -116,6 +116,7 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         promptRequestId: newRequestId,
         cancelRequestId: null,
         cancelPending: false,
+        cancelError: null,
         pendingSelections: new Map(),
         lastError: null,
       });
@@ -131,16 +132,36 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         text: text,
       };
 
-      socketRef.current?.send(command);
+      // Dispatch failure (socket unavailable/disconnected) must not leave the
+      // store stuck in a pending prompt: clear the turn state and surface an
+      // honest error instead of silently dropping the send.
+      const sent = socketRef.current?.send(command) ?? false;
+      if (!sent) {
+        useChatStore.setState({
+          turnId: "",
+          messageId: "",
+          promptRequestId: null,
+          cancelRequestId: null,
+          cancelPending: false,
+          cancelError: null,
+          activeTurnId: null,
+          activeMessageId: null,
+          lastError: {
+            code: "send_failed",
+            message: "Could not send prompt: connection unavailable",
+          },
+        });
+      }
     },
     onCancel: async () => {
       // Each cancel is a distinct protocol command with its own request_id.
       // It reuses the target prompt's stable session_id and active turn_id,
       // never the prompt's request_id.
-      const cancelRequestId = crypto.randomUUID();
+      const cancelRequestId = generateId();
       useChatStore.setState({
         cancelRequestId,
         cancelPending: true,
+        cancelError: null,
       });
       const command: ClientCommand = {
         protocol_version: 1,
@@ -149,7 +170,18 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         session_id: sessionId,
         turn_id: turnId,
       };
-      socketRef.current?.send(command);
+      // Dispatch failure must not leave cancelPending stuck: clear it and
+      // surface an honest error while retaining the active prompt state.
+      const sent = socketRef.current?.send(command) ?? false;
+      if (!sent) {
+        useChatStore.setState({
+          cancelPending: false,
+          cancelError: {
+            code: "send_failed",
+            message: "Could not send cancel: connection unavailable",
+          },
+        });
+      }
     },
     onAddToolResult: () => {
       // Tool results arrive as backend events (tool_result), not client-side

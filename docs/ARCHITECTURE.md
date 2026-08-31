@@ -89,32 +89,59 @@ option.
 
 ## Identity ownership and lifecycle
 
-Identifiers are UUIDs (`crypto.randomUUID()` in the frontend) and each has one
-purpose; none is encoded inside another.
+Identifiers are UUIDs through a single centralized `generateId()` helper
+backed by `crypto.randomUUID()` in the frontend (`frontend/src/state/chatStore.ts`);
+no call site builds identifiers from `Date.now()` and none is encoded inside
+another.
 
 | Identifier | Owner | Lifecycle |
 |---|---|---|
-| `session_id` | Frontend | Stable logical conversation identity. Created once per chat, unchanged across every turn, replaced only by New Chat. |
-| `turn_id` | Frontend | One per prompt execution, generated before dispatch so the turn can be cancelled before the first response. |
+| `session_id` | Frontend (logical conversation) | Stable for the whole chat. Created once per chat, unchanged across every turn, replaced only by New Chat. Carried on the wire for UI correlation. |
+| `turn_id` | Frontend | One per prompt execution, distinct UUID generated before dispatch so the turn can be cancelled before the first backend response. |
 | `message_id` | Frontend | One per logical message; never reused as a command `request_id`. |
-| `request_id` | Frontend | One per protocol command; prompt and cancel commands get different IDs. |
-| `rtai_session_id` | Backend | Server-assigned history identity, one per WebSocket, used only for the SQLite transcript store. |
+| `request_id` | Frontend | One per protocol command; prompt and cancel commands get different UUIDs. |
+| `rtai_session_id` | Backend (history) | Server-assigned per WebSocket on accept, used only as the SQLite transcript key (`GET /api/sessions/...`). Never derived from the client `session_id`. |
+| ACP `sessionId` | Backend adapter (ACP-native) | Created inside `backend/app/agents/acp/session.py` during `initialize`/`new_session`; native OpenCode/ACP session identity, never exposed on the RTAI wire. RTAI maps its logical `session_id`/`turn_id` envelope to this inside the adapter only. |
 
 The frontend owns the conversation `session_id` and reuses it for every turn
 in a chat; it never appends turn or message identity to it. The backend
 independently assigns `rtai_session_id` on accept for history persistence and
-never derives it from the client `session_id`. The two are distinct and not
-interchangeable (see `docs/EVENT_PROTOCOL.md`).
+creates a separate adapter-native ACP `sessionId` inside the agent session.
+The three are distinct and not interchangeable (see `docs/EVENT_PROTOCOL.md`
+ACP boundary). `generateId()` is the sole UUID source; `${sessionId}-turn-${Date.now()}`
+and reuse of `message_id` as `request_id` are prohibited.
 
 ### One active turn per WebSocket
 
 Each WebSocket supports exactly one active turn at a time. A second prompt
 while a turn is active is rejected honestly with a failed `command_result`
 (`"A response is already running"`); it is never silently replaced or
-cancelled. Cancellation targets only the active turn: the backend matches the
-cancel's `session_id`/`turn_id` against the active turn and treats a stale or
-mismatched cancel as a safe idempotent no-op. The terminal event for a
-cancelled turn is `done {reason: "cancelled"}`, emitted exactly once.
+cancelled.
+
+Cancellation is validated against the exact active RTAI turn **before** any
+ACP `session/cancel` (a notification carrying only `sessionId` per
+https://agentclientprotocol.com/protocol/v1/prompt-turn) is forwarded. RTAI's
+`request_id`/`turn_id`/`message_id`/`command_result` are wrapper features, not
+ACP fields. The backend (see `docs/EVENT_PROTOCOL.md`):
+
+- forwards to `adapter.cancel()` once only for the first cancel matching the
+  active turn (`success: true`, single local task `cancel()`, single terminal
+  `done {reason: "cancelled"}`);
+- treats a duplicate cancel for the same already-cancelling turn as an
+  idempotent `success: true` without calling the adapter again;
+- treats a cancel for the exact most-recently terminal turn as a safe
+  successful no-op;
+- rejects honestly with `success: false` (`turn_not_active`/`turn_mismatch`)
+  for a different session, different turn, unknown turn, or no relevant turn,
+  cancelling nothing. Mismatches are never reported as `success: true`.
+
+The frontend correlates the terminal `done` by matching both `sessionId` and
+the pending/active `turnId` (not only `activeTurnId`), clears prompt/cancel
+state only for that matching turn, and ignores late terminal events from older
+turns. Dispatch failures (socket unavailable/disconnected) clear the pending
+prompt or `cancelPending` with an honest error instead of silently leaving
+state stuck; the UI never instantiates `WebSocket` directly, only through
+`useRtaiSocket`'s boolean `send()`.
 
 ## Prompt content boundary
 

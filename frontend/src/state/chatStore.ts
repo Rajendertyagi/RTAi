@@ -46,6 +46,7 @@ export interface ChatStateData {
   promptRequestId: string | null;
   cancelRequestId: string | null;
   cancelPending: boolean;
+  cancelError: { code?: string; message: string } | null;
 
   messages: ChatMessage[];
   activeTurnId: string | null;
@@ -101,7 +102,22 @@ export interface ChatStateActions {
 
 export type ChatState = ChatStateData & ChatStateActions;
 
-const generateId = () => crypto.randomUUID();
+// Centralized identifier generator. Every RTAI identity (session, turn,
+// message, request) is a UUID v4 from the Web Crypto API. Never build
+// identifiers from Date.now() and never embed one identity inside another.
+export const generateId = () => crypto.randomUUID();
+
+// The set of turn-scoped fields cleared when the current turn terminates
+// (done/error/cancel) or when dispatch fails. Only the matching turn is
+// cleared; a late terminal event from an older turn is ignored.
+const clearTurnState = {
+  activeTurnId: null,
+  activeMessageId: null,
+  promptRequestId: null,
+  cancelRequestId: null,
+  cancelPending: false,
+  cancelError: null,
+} as const;
 
 // Derive a stored reason object from a backend `available: false` frame.
 // Falls back to a neutral code/message only when the backend omitted both,
@@ -183,9 +199,13 @@ export const useChatStore = create<ChatState>()(
               set({ connectionState: "connecting" });
             } else {
               set({ connectionState: "disconnected", connected: false });
-              // Connection lost — in-flight selections can no longer resolve.
+              // Connection lost — in-flight selections and the active turn can
+              // no longer resolve, so clear their pending state.
               if (state.pendingSelections.size > 0) {
                 set({ pendingSelections: new Map() });
+              }
+              if (state.activeTurnId !== null || state.promptRequestId !== null) {
+                set(clearTurnState);
               }
             }
             break;
@@ -266,6 +286,25 @@ export const useChatStore = create<ChatState>()(
           }
 
           case "command_result": {
+            // Cancel acknowledgements are correlated by the cancel command's
+            // own request_id. On failure, clear the pending cancel flag and
+            // surface the backend error while retaining the active prompt
+            // state. On success, keep the turn correlated until its matching
+            // terminal `done` arrives (cleared there).
+            if (event.command === "cancel") {
+              if (!event.success) {
+                set({
+                  cancelPending: false,
+                  cancelError: {
+                    code: event.code,
+                    message: event.message ?? "Cancel failed",
+                  },
+                });
+              } else {
+                set({ cancelPending: false, cancelError: null });
+              }
+              break;
+            }
             // Correlate by request_id. A matching pending entry means this
             // result resolves a selection we initiated.
             const pending = state.pendingSelections.get(event.request_id);
@@ -342,17 +381,15 @@ export const useChatStore = create<ChatState>()(
           }
 
           case "done":
+            // Match the stable current turn (pending/active) by turn_id, not
+            // only activeTurnId: cancellation must clear state before a
+            // user_message establishes activeTurnId. A late terminal event
+            // from an older turn is ignored.
             if (
               event.session_id === state.sessionId &&
-              event.turn_id === state.activeTurnId
+              event.turn_id === state.turnId
             ) {
-              set({
-                activeTurnId: null,
-                activeMessageId: null,
-                promptRequestId: null,
-                cancelRequestId: null,
-                cancelPending: false,
-              });
+              set(clearTurnState);
             }
             break;
 
@@ -474,24 +511,33 @@ export const useChatStore = create<ChatState>()(
           }
 
           case "cancelled":
+            // Legacy defensive handler: the backend now emits a single
+            // `done {reason: "cancelled"}` instead of a separate `cancelled`
+            // event, but clear matching state if one still arrives.
             if (
               event.session_id === state.sessionId &&
-              event.turn_id === state.activeTurnId
+              event.turn_id === state.turnId
             ) {
-              set({
-                activeTurnId: null,
-                activeMessageId: null,
-                promptRequestId: null,
-                cancelRequestId: null,
-                cancelPending: false,
-              });
+              set(clearTurnState);
             }
             break;
 
           case "warning":
-          case "error":
             // Diagnostics only — surfaced by toast/error UI elsewhere.
             console.warn("[RTAI]", event.type, event.message);
+            break;
+
+          case "error":
+            // A terminal error for the current turn clears its pending state.
+            // Errors without a matching turn (or without turn correlation) are
+            // diagnostics only.
+            console.warn("[RTAI]", event.type, event.message);
+            if (
+              event.session_id === state.sessionId &&
+              event.turn_id === state.turnId
+            ) {
+              set(clearTurnState);
+            }
             break;
         }
       },
@@ -585,6 +631,7 @@ export const useChatStore = create<ChatState>()(
           promptRequestId: null,
           cancelRequestId: null,
           cancelPending: false,
+          cancelError: null,
           messages: [],
           activeTurnId: null,
           activeMessageId: null,

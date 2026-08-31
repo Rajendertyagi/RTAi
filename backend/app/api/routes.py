@@ -199,6 +199,15 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
 
     # Correlation aliases for the active turn; updated by the prompt branch.
     turn_ctx: dict[str, str] = {}
+    # Cancellation state for the active turn. `cancel_requested` is True once a
+    # matching cancel has been forwarded to the adapter for the current active
+    # turn, so a duplicate cancel for the same turn is an idempotent no-op that
+    # never calls the adapter again. `last_terminal_*` records the most recently
+    # terminal turn so a late cancel for an already-finished turn is a safe
+    # no-op rather than a mismatch error.
+    cancel_requested = False
+    last_terminal_session: str | None = None
+    last_terminal_turn: str | None = None
     # Monotonic per-turn sequence counter for streaming deltas.
     delta_seq = 0
     # Session-local occurrence counters for event families that repeat without
@@ -261,7 +270,7 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
         the v1 marker the frontend requires.  The field is set after the raw
         payload is copied so adapter-provided values cannot override it.
         """
-        nonlocal delta_seq, persist_failed
+        nonlocal delta_seq, persist_failed, last_terminal_session, last_terminal_turn
         session_id = turn_ctx.get("session_id", "")
         if session_id:
             # Wrap with the authoritative envelope (session_id, turn_id,
@@ -328,6 +337,10 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 length=content_length,
             )
         if event_type in ("done", "error"):
+            # Record the most recently terminal turn so a late cancel for an
+            # already-finished turn is a safe no-op rather than a mismatch.
+            last_terminal_session = frame.get("session_id")
+            last_terminal_turn = frame.get("turn_id")
             log_event(
                 logger,
                 logging.INFO,
@@ -548,6 +561,9 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     message_id=msg_id,
                     request_id=str(raw.get("request_id") or ""),
                 )
+                # A new active turn resets the cancellation-requested flag so a
+                # fresh cancel for this turn is treated as the first cancel.
+                cancel_requested = False
                 delta_seq = 0
                 log_event(
                     logger,
@@ -745,25 +761,64 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                     session=short_id(raw.get("session_id")),
                     turn=short_id(raw.get("turn_id")),
                 )
-                # The cancel must target the exact active turn. A cancel whose
-                # session/turn does not match the active turn (stale, mismatched,
-                # or no turn in flight) is a safe idempotent no-op: it must never
-                # cancel a newer/different turn. Only one turn is active per
+                # The cancel must target the exact active RTAI turn before any
+                # ACP cancellation is forwarded. Only one turn is active per
                 # WebSocket, so the active turn is the sole cancellation target.
+                # A stale/mismatched/unknown cancel is rejected honestly and
+                # never forwarded to ACP, so it can never cancel a newer turn.
                 active_session = turn_ctx.get("session_id")
                 active_turn = turn_ctx.get("turn_id")
                 target_session = raw.get("session_id")
                 target_turn = raw.get("turn_id")
-                if (
-                    not prompt_task
-                    or prompt_task.done()
-                    or active_session != target_session
-                    or active_turn != target_turn
-                ):
+                turn_active = prompt_task is not None and not prompt_task.done()
+                matches_active = (
+                    turn_active and active_session == target_session and active_turn == target_turn
+                )
+                if matches_active:
+                    if cancel_requested:
+                        # Duplicate cancel for the same already-cancelling turn:
+                        # idempotent successful acknowledgement; never call the
+                        # adapter again.
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "cancellation_duplicate",
+                            session=short_id(target_session),
+                            turn=short_id(target_turn),
+                        )
+                        await emit(
+                            {
+                                "type": "command_result",
+                                "request_id": raw["request_id"],
+                                "command": "cancel",
+                                "success": True,
+                            }
+                        )
+                        continue
+                    # First cancel for the active turn: mark it as
+                    # cancellation-requested, forward to ACP once, and cancel the
+                    # local prompt task once. The task's CancelledError handler
+                    # emits the single terminal `done {reason: "cancelled"}`.
+                    cancel_requested = True
+                    await adapter.cancel()
+                    if prompt_task and not prompt_task.done():
+                        prompt_task.cancel()
+                    await emit(
+                        {
+                            "type": "command_result",
+                            "request_id": raw["request_id"],
+                            "command": "cancel",
+                            "success": True,
+                        }
+                    )
+                    continue
+                # Not the active turn. A cancel for the exact most-recently
+                # terminal turn is a safe successful no-op (already finished).
+                if target_session == last_terminal_session and target_turn == last_terminal_turn:
                     log_event(
                         logger,
                         logging.INFO,
-                        "cancellation_noop",
+                        "cancellation_already_terminal",
                         session=short_id(target_session),
                         turn=short_id(target_turn),
                     )
@@ -776,15 +831,22 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                         }
                     )
                     continue
-                await adapter.cancel()
-                if prompt_task and not prompt_task.done():
-                    prompt_task.cancel()
+                # Different session, different turn, unknown turn, or no relevant
+                # turn: reject honestly and cancel nothing.
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "cancellation_rejected",
+                    session=short_id(target_session),
+                    turn=short_id(target_turn),
+                )
                 await emit(
                     {
                         "type": "command_result",
                         "request_id": raw["request_id"],
                         "command": "cancel",
-                        "success": True,
+                        "success": False,
+                        "message": "turn_not_active",
                     }
                 )
                 continue
