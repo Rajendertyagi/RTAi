@@ -20,24 +20,25 @@ phase status changes.
 
 - **Branch**: `feature/react-ui-foundation`
 - **Starting SHA**: `88d47c3`
-- **Documentation commit (unpushed)**: `025e015` — `docs(ui): define OpenChamber-inspired frontend specification`
-- **Current CI state**: Green for `88d47c3`; documentation commit not yet pushed
-- **Known Playwright status**: No E2E tests exist yet (Phase 8); Playwright repair deferred to separate task
-- **Recovery stash**: `stash@{0}: recovery: attachment and shell changes before branch repair` -- untouched
+- **Documentation commit**: `ca17f8e` — `docs(ui): define OpenChamber-inspired frontend specification`
+- **Specification revision**: This commit — corrected measurements, resolved decisions, removed invented features
+- **Current CI state**: Green for `ca17f8e` (documentation only)
+- **Known Playwright status**: No E2E tests exist yet; Playwright repair deferred to separate task
+- **Recovery stash**: `stash@{0}: recovery: attachment and shell changes before branch repair` — untouched
 
 ## Phase table
 
 | # | Phase | Scope | Status | Source SHA | CI run | Visual evidence | Remaining work |
 |---|---|---|---|---|---|---|---|
-| 1 | Design specification | Create `docs/FRONTEND_UI_SPEC.md` and `docs/VISUAL_MVP_TRACKER.md`; resolve all open decisions | Specified | `88d47c3` | N/A (doc only) | N/A | None |
-| 2 | Fluid application shell | Shell fills viewport; no overflow; flex shrink chain correct; locked contract enforced | Implemented in source | `88d47c3` | N/A | N/A | Visual verification at 320/768/1024/1920px |
-| 3 | Left sidebar | Desktop static column + mobile off-canvas drawer with backdrop | Implemented in source | `88d47c3` | N/A | N/A | Phase 5: wire to SQLite session list |
-| 4 | Thread / empty state | Empty centered state; message alignment; avatar styling; scroll-to-bottom button | Implemented in source (button deferred) | `88d47c3` | N/A | N/A | Add scroll-to-bottom glass pill; message timestamps; copy action |
-| 5 | Composer | Input auto-grow; send/stop toggle; capability controls | Implemented in source | `88d47c3` | N/A | N/A | Attachments (adapter unavailable); mobile expanded mode (deferred) |
-| 6 | Message presentation | User bubbles; assistant cards; ToolCard; StatusBar | Implemented in source | `88d47c3` | N/A | N/A | Hover actions, timestamps |
+| 1 | Design specification | Rewritten spec aligned to OpenChamber measurements; all open decisions resolved | Specified | `ca17f8e` | N/A (doc only) | N/A | None |
+| 2 | Fluid application shell | `h-dvh` shell, flex shrink chain, no page overflow | Planned | — | — | — | Implement shell per spec section 4 |
+| 3 | Left sidebar | Desktop static column + mobile off-canvas drawer with `inert` focus exclusion | Planned | — | — | — | Implement drawer per spec section 7 |
+| 4 | Thread / empty state | Empty centered state; message alignment; scroll-to-bottom button | Planned | — | — | — | Implement per spec sections 8-9 |
+| 5 | Composer | Input auto-grow; send/stop toggle; CapabilitySelectors footer layout | Planned | — | — | — | Implement per spec section 9 |
+| 6 | Message presentation | User bubbles; assistant cards; ToolCard; StatusBar | Planned | — | — | — | Implement per spec section 8 |
 | 7 | Right sidebar / rail | Target defined in spec; no implementation yet | Deferred | — | — | — | Requires context surface registry backend |
-| 8 | Responsive polish | Verify all breakpoints; no layout break at any width | Planned | — | — | — | Screenshot capture at 320/375/768/1024/1280/1440/1920/2560px |
-| 9 | Accessibility | Focus order, ARIA labels, reduced motion, contrast | Partially implemented | `88d47c3` | N/A | N/A | Focus trap in drawer; screen reader testing |
+| 8 | Responsive polish | Verify all breakpoints; no layout break at any width | Planned | — | — | — | Test at 320/375/768/1024/1280/1440/1920/2560px |
+| 9 | Accessibility | Focus order, ARIA labels, reduced motion, `inert` drawer, 44px touch targets | Planned | — | — | — | Implement per spec section 11 |
 | 10 | Visual verification | Screenshots at every breakpoint/state from acceptance checklist | Planned | — | — | — | Capture before each milestone merge |
 | 11 | Replacement tests | Update existing component tests for new shell/components | Planned | — | — | — | Tests in `tests/frontend/` must match new structure |
 
@@ -45,9 +46,9 @@ phase status changes.
 
 | Date | SHA | Agent/task | Area | Result | CI | Visual status | Next action |
 |---|---|---|---|---|---|---|---|
-| 2026-08-31 | `88d47c3` | Agnes (spec writer) | Design specification | Created `docs/FRONTEND_UI_SPEC.md` (1063 lines) and `docs/VISUAL_MVP_TRACKER.md` | N/A | N/A | Begin shell milestone implementation |
-| 2026-08-31 | `88d47c3` | Agnes (spec writer) | Rail layout decision | Updated spec to dual-column: `max-w-[48rem]` message column + `w-full` composer (OpenChamber pattern) | N/A | N/A | Ready for implementation |
-| 2026-08-31 | `025e015` | Agnes (spec finalizer) | Locked contract + decision resolution | Added section 0 locked contract; resolved all 5 open decisions; clarified right panel dimensions from OpenChamber source | N/A | N/A | Amend and push finalized spec; begin shell implementation |
+| 2026-08-31 | `88d47c3` | Agnes (spec writer) | Design specification | Created initial `docs/FRONTEND_UI_SPEC.md` and `docs/VISUAL_MVP_TRACKER.md` | N/A | N/A | — |
+| 2026-08-31 | `ca17f8e` | Agnes (spec finalizer) | Locked contract + decision resolution | Added section 0 locked contract; resolved 5 open decisions; clarified right panel dimensions | N/A | N/A | Spec rewrite phase |
+| 2026-08-31 | `ca17f8e` | Agnes (spec rewriter) | Full specification rewrite | Rewrote spec to 467 lines; corrected header height (48px), composer width (48rem cap), mobile breakpoint (1024px); removed invented features; fixed accessibility contract | N/A | N/A | Begin shell milestone implementation |
 
 ## Permanent agent rule
 
