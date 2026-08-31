@@ -1,0 +1,38 @@
+[project]
+name = "rtai-backend"
+version = "0.1.0"
+description = "FastAPI backend bridging a web UI to AI coding agents over ACP"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.116,<1",
+    "uvicorn[standard]>=0.35,<1",
+    "agent-client-protocol==0.12.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.4",
+    "mypy>=1.14,<2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["app"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.14"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

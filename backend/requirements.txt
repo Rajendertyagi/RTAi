@@ -1,0 +1,4 @@
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+agent-client-protocol==0.12.1
+starlette>=0.46,<1.0  # pin below httpx2 requirement
