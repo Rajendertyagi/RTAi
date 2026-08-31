@@ -26,30 +26,53 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .errors import CursorValidationError, HistoryStorageError
 from .migrations import migrate
 from .models import HistoryEvent, HistorySession, SessionStatus
 
 _WAL_MARKER = "wal"
 _BUSY_TIMEOUT_MS = 5000
 
+#: Single supported opaque-cursor format version. Cursors are not a released
+#: external contract, so there is no backwards-compatibility shim for older
+#: formats.
+_CURSOR_VERSION = "v1"
+#: Field separator inside the (versioned) cursor payload.
+_CURSOR_SEP = "\x1f"
 
-class HistoryStorageError(RuntimeError):
-    """Raised when a persistence operation fails."""
+#: Hard page-size bounds. The API layer validates client-supplied limits and
+#: rejects out-of-range values with HTTP 400; the repository enforces the same
+#: bounds defensively rather than silently clamping.
+_SESSION_LIST_MAX = 200
+_EVENT_LIST_MAX = 500
 
 
 def _encode_cursor(*parts: str) -> str:
-    raw = "\x1f".join(parts)
+    raw = _CURSOR_SEP.join([_CURSOR_VERSION, *parts])
     return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
 
 
 def _decode_cursor(cursor: str | None) -> list[str] | None:
+    """Strictly decode a versioned opaque cursor.
+
+    Returns ``None`` for an empty/absent cursor (first page). Any non-empty
+    malformed cursor raises :class:`CursorValidationError`; it is never
+    silently treated as the first page.
+    """
     if not cursor:
         return None
     try:
-        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return raw.split("\x1f")
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii"), validate=True)
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise CursorValidationError("cursor is not valid base64") from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CursorValidationError("cursor is not valid UTF-8") from exc
+    parts = text.split(_CURSOR_SEP)
+    if not parts or parts[0] != _CURSOR_VERSION:
+        raise CursorValidationError("unsupported cursor version")
+    return parts[1:]
 
 
 def _configure(conn: sqlite3.Connection) -> None:
@@ -168,19 +191,23 @@ class SqliteHistoryRepository:
     def list_sessions(
         self, cursor: str | None = None, limit: int = 50
     ) -> tuple[list[HistorySession], str | None]:
-        limit = max(1, min(limit, 200))
+        if not 1 <= limit <= _SESSION_LIST_MAX:
+            raise ValueError(f"limit must be between 1 and {_SESSION_LIST_MAX}")
         parts = _decode_cursor(cursor)
         params: list[Any] = []
         where = ""
-        if parts is not None and len(parts) == 2:
+        if parts is not None:
+            if len(parts) != 2:
+                raise CursorValidationError("session cursor must have 2 fields")
             try:
                 updated_at = int(parts[0])
-            except ValueError:
-                updated_at = None
-            if updated_at is not None:
-                # Keyset pagination: strictly older than the cursor row.
-                where = "WHERE (updated_at < ? OR (updated_at = ? AND rtai_session_id < ?))"
-                params = [updated_at, updated_at, parts[1]]
+            except ValueError as exc:
+                raise CursorValidationError("session cursor has a non-numeric updated_at") from exc
+            if not parts[1]:
+                raise CursorValidationError("session cursor has an empty session id")
+            # Keyset pagination: strictly older than the cursor row.
+            where = "WHERE (updated_at < ? OR (updated_at = ? AND rtai_session_id < ?))"
+            params = [updated_at, updated_at, parts[1]]
         params.append(limit + 1)
         with self._connect() as conn:
             rows = conn.execute(
@@ -300,18 +327,24 @@ class SqliteHistoryRepository:
     def get_events(
         self, rtai_session_id: str, cursor: str | None = None, limit: int = 200
     ) -> tuple[list[HistoryEvent], str | None]:
-        limit = max(1, min(limit, 500))
+        if not 1 <= limit <= _EVENT_LIST_MAX:
+            raise ValueError(f"limit must be between 1 and {_EVENT_LIST_MAX}")
         parts = _decode_cursor(cursor)
         params: list[Any] = [rtai_session_id]
         where = ""
-        if parts is not None and len(parts) == 2:
+        if parts is not None:
+            if len(parts) != 2:
+                raise CursorValidationError("event cursor must have 2 fields")
             try:
                 ordinal = int(parts[0])
-            except ValueError:
-                ordinal = None
-            if ordinal is not None:
-                where = "AND (event_ordinal > ? OR (event_ordinal = ? AND id > ?))"
-                params.extend([ordinal, ordinal, parts[1]])
+            except ValueError as exc:
+                raise CursorValidationError("event cursor has a non-numeric ordinal") from exc
+            try:
+                event_id = int(parts[1])
+            except ValueError as exc:
+                raise CursorValidationError("event cursor has a non-numeric id") from exc
+            where = "AND (event_ordinal > ? OR (event_ordinal = ? AND id > ?))"
+            params.extend([ordinal, ordinal, event_id])
         params.append(limit + 1)
         with self._connect() as conn:
             rows = conn.execute(

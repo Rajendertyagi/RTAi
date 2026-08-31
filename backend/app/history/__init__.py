@@ -8,14 +8,17 @@ repository boundary is provider-neutral: application code depends on
 
 from __future__ import annotations
 
+from .errors import CursorValidationError, HistoryStorageError
 from .models import HistoryEvent, HistorySession, SessionStatus
 from .repository import HistoryRepository
 from .sqlite_repository import SqliteHistoryRepository
 
 __all__ = [
+    "CursorValidationError",
     "HistoryEvent",
     "HistoryRepository",
     "HistorySession",
+    "HistoryStorageError",
     "SessionStatus",
     "SqliteHistoryRepository",
 ]

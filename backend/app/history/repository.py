@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from .errors import CursorValidationError
 from .models import HistoryEvent, HistorySession, SessionStatus
+
+__all__ = ["CursorValidationError", "HistoryRepository"]
 
 
 @runtime_checkable

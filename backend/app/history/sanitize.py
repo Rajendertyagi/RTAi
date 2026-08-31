@@ -81,16 +81,41 @@ def sanitize_event_payload(frame: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def event_discriminator(event_type: str, frame: dict[str, Any]) -> str | None:
+    """Return the stable field that disambiguates one event of this family.
+
+    Several event families can legitimately repeat within a single turn (or
+    within one part/tool), and their distinguishing id is not part of the
+    ``turn_id``/``message_id``/``sequence`` identity. This returns that field
+    so the persisted ``event_key`` stays unique without collapsing separate
+    events. Returns ``None`` when the family carries no such field.
+    """
+    if event_type in ("tool_start", "tool_update", "tool_result"):
+        return frame.get("tool_call_id")
+    if event_type in ("permission_request", "permission_result"):
+        return frame.get("permission_request_id")
+    if event_type in ("part_start", "part_delta", "part_done"):
+        return frame.get("part_id")
+    return None
+
+
 def build_event_key(
     event_type: str,
     turn_id: str | None,
     message_id: str | None,
     sequence: int | None,
+    discriminator: str | None = None,
 ) -> str:
     """Deterministic, non-null idempotency key for one event.
 
     Timestamp is deliberately excluded: a retry may carry a different
     timestamp but must still deduplicate against the original.
+
+    ``sequence`` is the protocol per-turn sequence where one exists (``delta``)
+    or a session-local occurrence value for families that repeat without a
+    wire sequence (``part_delta``, ``tool_update``). ``discriminator`` is the
+    stable per-family id (``tool_call_id``, ``permission_request_id``,
+    ``part_id``) so separate events never collapse.
     """
     return "|".join(
         [
@@ -98,5 +123,6 @@ def build_event_key(
             turn_id or "",
             message_id or "",
             str(sequence) if sequence is not None else "",
+            discriminator or "",
         ]
     )

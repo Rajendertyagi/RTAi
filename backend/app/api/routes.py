@@ -27,9 +27,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSock
 from ..agents.base import AgentAdapter
 from ..agents.capabilities import AttachmentCapabilities, SessionCapabilities
 from ..core.protocol import resolve_project_path
+from ..history.errors import CursorValidationError
 from ..history.models import HistoryEvent, HistorySession, SessionStatus
 from ..history.sanitize import (
     build_event_key,
+    event_discriminator,
     is_persistable,
     sanitize_event_payload,
 )
@@ -47,6 +49,9 @@ logger = logging.getLogger(__name__)
 
 _SESSION_LIST_LIMIT = 50
 _EVENT_LIST_LIMIT = 200
+#: Hard page-size bounds (mirror the repository's defensive bounds).
+_SESSION_LIST_MAX = 200
+_EVENT_LIST_MAX = 500
 
 
 @router.get("/api/health")
@@ -64,16 +69,45 @@ def _repo(request: Request):
     return getattr(request.app.state, "history_repository", None)
 
 
+def _bad_request(code: str, message: str) -> HTTPException:
+    """Normalized JSON 400 error: ``{"error": {"code": ..., "message": ...}}``."""
+    return HTTPException(status_code=400, detail={"error": {"code": code, "message": message}})
+
+
+def _parse_limit(raw: str | None, default: int, maximum: int) -> int:
+    """Validate a client-supplied ``limit``, returning 400 on any invalid value.
+
+    ``limit`` is accepted as a raw string so non-numeric input is rejected with
+    the normalized 400 error rather than FastAPI's automatic 422. Invalid
+    values are never silently clamped.
+    """
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise _bad_request(
+            "invalid_limit", f"limit must be an integer between 1 and {maximum}"
+        ) from None
+    if not 1 <= value <= maximum:
+        raise _bad_request("invalid_limit", f"limit must be an integer between 1 and {maximum}")
+    return value
+
+
 @router.get("/api/sessions")
 async def list_sessions(
     request: Request,
     cursor: str | None = Query(default=None),
-    limit: int = Query(default=_SESSION_LIST_LIMIT, ge=1, le=200),
+    limit: str | None = Query(default=None),
 ) -> dict[str, Any]:
     repo = _repo(request)
     if repo is None:
         raise HTTPException(status_code=503, detail={"error": "history_unavailable"})
-    items, next_cursor = repo.list_sessions(cursor=cursor, limit=limit)
+    page_limit = _parse_limit(limit, _SESSION_LIST_LIMIT, _SESSION_LIST_MAX)
+    try:
+        items, next_cursor = repo.list_sessions(cursor=cursor, limit=page_limit)
+    except CursorValidationError as exc:
+        raise _bad_request("invalid_cursor", str(exc)) from None
     return {
         "sessions": [_session_dict(s) for s in items],
         "next_cursor": next_cursor,
@@ -96,14 +130,18 @@ async def get_session_events(
     request: Request,
     session_id: str,
     cursor: str | None = Query(default=None),
-    limit: int = Query(default=_EVENT_LIST_LIMIT, ge=1, le=500),
+    limit: str | None = Query(default=None),
 ) -> dict[str, Any]:
     repo = _repo(request)
     if repo is None:
         raise HTTPException(status_code=503, detail={"error": "history_unavailable"})
     if repo.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail={"error": "session_not_found"})
-    items, next_cursor = repo.get_events(session_id, cursor=cursor, limit=limit)
+    page_limit = _parse_limit(limit, _EVENT_LIST_LIMIT, _EVENT_LIST_MAX)
+    try:
+        items, next_cursor = repo.get_events(session_id, cursor=cursor, limit=page_limit)
+    except CursorValidationError as exc:
+        raise _bad_request("invalid_cursor", str(exc)) from None
     return {
         "events": [_event_dict(e) for e in items],
         "next_cursor": next_cursor,
@@ -163,6 +201,11 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
     turn_ctx: dict[str, str] = {}
     # Monotonic per-turn sequence counter for streaming deltas.
     delta_seq = 0
+    # Session-local occurrence counters for event families that repeat without
+    # a wire sequence (part_delta chunks per part, tool_update per tool). These
+    # are persistence-only identity values; they are never sent on the wire.
+    part_delta_occurrence: dict[tuple[str, str], int] = {}
+    tool_update_occurrence: dict[tuple[str, str], int] = {}
 
     async def _persist_frame(frame: dict[str, Any]) -> None:
         """Persist one trusted normalized frame (best-effort, thread-safe)."""
@@ -175,6 +218,19 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
         payload = sanitize_event_payload(frame)
         if not payload:
             return
+        # Identity: the protocol sequence where one exists, otherwise a
+        # deterministic session-local occurrence value for families that
+        # repeat without a wire sequence. Computed here, before the DB write,
+        # so a retry of the same operation reuses the same key.
+        sequence = frame.get("sequence")
+        if event_type == "part_delta":
+            part_key = (str(frame.get("turn_id") or ""), str(frame.get("part_id") or ""))
+            part_delta_occurrence[part_key] = part_delta_occurrence.get(part_key, 0) + 1
+            sequence = part_delta_occurrence[part_key]
+        elif event_type == "tool_update":
+            tool_key = (str(frame.get("turn_id") or ""), str(frame.get("tool_call_id") or ""))
+            tool_update_occurrence[tool_key] = tool_update_occurrence.get(tool_key, 0) + 1
+            sequence = tool_update_occurrence[tool_key]
         event = HistoryEvent(
             rtai_session_id=rtai_session_id,
             event_type=event_type,
@@ -182,7 +238,8 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                 event_type,
                 frame.get("turn_id"),
                 frame.get("message_id"),
-                frame.get("sequence"),
+                sequence,
+                event_discriminator(event_type, frame),
             ),
             payload=payload,
             turn_id=frame.get("turn_id"),

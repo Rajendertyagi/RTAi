@@ -185,6 +185,31 @@ protocol (`history/repository.py`), never on SQLite directly.
   fields and drops credentials, raw provider payloads, process commands, and
   unsafe debug/data content.
 
+### Event identity and deduplication
+
+Every stored event gets a non-empty, deterministic `event_key` built from
+stable protocol identity fields — never from timestamps and never from
+Python's non-stable `hash()`. The key is `event_type | turn_id | message_id |
+sequence | discriminator`, where:
+
+- `sequence` is the protocol per-turn sequence where one exists (`delta`), or
+  a session-local occurrence value for families that repeat without a wire
+  sequence (`part_delta` chunks per part, `tool_update` per tool).
+- `discriminator` is the stable per-family id: `tool_call_id` for tool events,
+  `permission_request_id` for permission events, `part_id` for part events.
+
+This guarantees that legitimate separate events never collapse (multiple tool
+calls in a turn, repeated tool updates, and repeated part deltas are all
+preserved), while a retry of the same persistence operation reuses the same
+key and deduplicates. Occurrence values are assigned once, before the database
+write, and are persistence-only — they are never exposed on the WebSocket
+wire. Atomic per-session ordering is provided by the repository-assigned
+`event_ordinal`, independent of the identity key.
+
+> **Limitation:** events already lost to the earlier collision behavior (when
+> the key omitted the discriminator/occurrence) cannot be reconstructed from
+> the database. Only the first event per collided key was stored.
+
 ### Transcript vs. resume
 
 Persisting a transcript is **not** the same as resuming a session. Native
@@ -200,6 +225,32 @@ does not expose it.
 - `GET /api/sessions/{session_id}` — session detail.
 - `GET /api/sessions/{session_id}/events` — transcript events (keyset
   pagination by `(event_ordinal, id)`).
+
+#### Ordering
+
+- Sessions are ordered newest-first by `(updated_at, rtai_session_id)`.
+- Events are ordered by `(event_ordinal, id)` within a session.
+
+#### Cursors and limits
+
+- Pagination cursors are opaque, URL-safe base64 strings with a single
+  explicit format version (`v1`). They are an internal contract, not a
+  client-editable one: clients must treat them as opaque and only echo back a
+  cursor returned by the API.
+- A session-list cursor encodes `(updated_at, rtai_session_id)`; an event-list
+  cursor encodes `(event_ordinal, id)` — the exact fields of the ordering,
+  including the deterministic tie-breaker.
+- An empty or absent cursor means the first page.
+- Any non-empty malformed cursor (bad base64, bad UTF-8, missing/extra fields,
+  unknown version, non-numeric or empty identifiers) is rejected with HTTP 400
+  (`{"error": {"code": "invalid_cursor", ...}}`). It is never silently treated
+  as the first page.
+- `limit` must be an integer within `[1, max]` (200 for sessions, 500 for
+  events). Non-numeric, zero, negative, or over-maximum values are rejected
+  with HTTP 400 (`{"error": {"code": "invalid_limit", ...}}`); they are never
+  silently clamped.
+- Unknown session ids return HTTP 404; internal repository failures are not
+  reported as 400.
 
 ### Adapter matrix
 
