@@ -1,6 +1,6 @@
 "use client";
 
-import { ThreadPrimitive, AuiIf } from "@assistant-ui/react";
+import { ThreadPrimitive, SuggestionPrimitive, AuiIf } from "@assistant-ui/react";
 import { useEffect, useRef, type RefObject } from "react";
 import { Menu } from "lucide-react";
 import { useChatStore } from "../state/chatStore";
@@ -83,7 +83,7 @@ export function ChatScreen({
         >
           <AuiIf condition={(s) => s.thread.isEmpty}>
             <div
-              className={`${SHARED_CONTENT_COLUMN} flex min-h-0 flex-1 flex-col items-center justify-center text-center`}
+              className={`${SHARED_CONTENT_COLUMN} flex min-h-0 flex-1 flex-col items-center justify-center text-center py-8`}
             >
               <h1 className="text-2xl font-normal text-foreground">
                 What are we working on?
@@ -91,6 +91,24 @@ export function ChatScreen({
               <p className="mt-2 text-sm text-muted-foreground">
                 Start a conversation with the AI assistant
               </p>
+              {/* Clickable suggestion pills */}
+              <div className="mt-6 grid w-full max-w-lg grid-cols-2 gap-2">
+                <ThreadPrimitive.Suggestions>
+                  {() => (
+                    <SuggestionPrimitive.Trigger
+                      send
+                      className="flex flex-col items-start gap-1 rounded-xl border border-interactive bg-surface-elevated px-4 py-3 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
+                    >
+                      <span className="font-medium text-sm text-foreground">
+                        <SuggestionPrimitive.Title />
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        <SuggestionPrimitive.Description />
+                      </span>
+                    </SuggestionPrimitive.Trigger>
+                  )}
+                </ThreadPrimitive.Suggestions>
+              </div>
             </div>
           </AuiIf>
 

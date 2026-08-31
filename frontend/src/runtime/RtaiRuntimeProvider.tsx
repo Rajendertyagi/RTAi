@@ -4,6 +4,8 @@ import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
   type ThreadMessageLike,
+  AuiConfig,
+  Suggestions,
 } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
@@ -196,7 +198,28 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
+    <AssistantRuntimeProvider
+      runtime={runtime}
+      config={AuiConfig({
+        suggestions: Suggestions([
+          {
+            title: "Write a shell script",
+            label: "Automation",
+            prompt: "Write a shell script to automate backups",
+          },
+          {
+            title: "Debug TypeScript",
+            label: "Development",
+            prompt: "Help me debug this TypeScript error",
+          },
+          {
+            title: "Explain WebSocket",
+            label: "Learning",
+            prompt: "Explain how WebSocket works",
+          },
+        ]),
+      })}
+    >
       {children}
     </AssistantRuntimeProvider>
   );
