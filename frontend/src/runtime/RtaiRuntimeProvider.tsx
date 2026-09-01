@@ -7,7 +7,7 @@ import {
   AuiConfig,
   Suggestions,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
 import { useRtaiSocket } from "../hooks/useRtaiSocket";
 import type { ClientCommand, ToolContentBlock } from "../types/protocol";
@@ -26,6 +26,7 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const sessionId = useChatStore((s) => s.sessionId);
   const turnId = useChatStore((s) => s.turnId);
   const reasoningParts = useChatStore((s) => s.reasoningParts);
+  const suggestions = useChatStore((s) => s.suggestions);
   const setConnected = useChatStore((s) => s.setConnected);
   const handleMessage = useChatStore((s) => s.handleMessage);
   const registerSend = useChatStore((s) => s.registerSend);
@@ -133,6 +134,8 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         cancelError: null,
         pendingSelections: new Map(),
         lastError: null,
+        completedTurnId: null,
+        suggestions: [],
       });
 
       // Send prompt via socket
@@ -160,6 +163,8 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
           cancelError: null,
           activeTurnId: null,
           activeMessageId: null,
+          completedTurnId: null,
+          suggestions: [],
           lastError: {
             code: "send_failed",
             message: "Could not send prompt: connection unavailable",
@@ -209,29 +214,23 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
     return () => socket.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Build dynamic suggestions config from store — replaces static hardcoded list
+  const config = useMemo(
+    () =>
+      AuiConfig({
+        suggestions: Suggestions(
+          suggestions.map((s) => ({
+            title: s.title,
+            label: "",
+            prompt: s.prompt,
+          })),
+        ),
+      }),
+    [suggestions],
+  );
+
   return (
-    <AssistantRuntimeProvider
-      runtime={runtime}
-      config={AuiConfig({
-        suggestions: Suggestions([
-          {
-            title: "Write a shell script",
-            label: "Automation",
-            prompt: "Write a shell script to automate backups",
-          },
-          {
-            title: "Debug TypeScript",
-            label: "Development",
-            prompt: "Help me debug this TypeScript error",
-          },
-          {
-            title: "Explain WebSocket",
-            label: "Learning",
-            prompt: "Explain how WebSocket works",
-          },
-        ]),
-      })}
-    >
+    <AssistantRuntimeProvider runtime={runtime} config={config}>
       {children}
     </AssistantRuntimeProvider>
   );

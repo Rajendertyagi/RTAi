@@ -50,12 +50,12 @@ class AgentAdapter(ABC):
     def capability_snapshot(self) -> CapabilitySnapshot:
         """Return what this adapter discovered, without inventing data."""
 
-    @abstractmethod
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         """Send one user prompt; results arrive through the emit sink."""
 
-    @abstractmethod
-    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+    async def submit_prompt_content(
+        self, content: list[PromptContent], turn_id: str = "", message_id: str = ""
+    ) -> None:
         """Send a multi-block prompt with validated attachments.
 
         Adapters that cannot accept attachments should raise a clear error;
@@ -88,7 +88,9 @@ class AgentAdapter(ABC):
         unaffected. AcpSession overrides this to wire the bus.
         """
 
-    def fire_suggestions(self, ctx: Any) -> None:
+    def fire_suggestions(
+        self, user_text: str = "", turn_id: str = "", message_id: str = ""
+    ) -> None:
         """Signal that the current turn has completed.
 
         The default no-op means adapters that do not support the pipeline

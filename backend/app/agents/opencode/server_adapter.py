@@ -454,7 +454,7 @@ class OpenCodeServerAdapter(AgentAdapter):
 
     # -- prompt / cancel ------------------------------------------------------
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         if not self._session_id:
             raise RuntimeError("OpenCode server session is not ready")
         self._sent_part_offsets.clear()
@@ -494,7 +494,9 @@ class OpenCodeServerAdapter(AgentAdapter):
         )
         # prompt_async responds 204; streaming arrives via the event stream.
 
-    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+    async def submit_prompt_content(
+        self, content: list[PromptContent], turn_id: str = "", message_id: str = ""
+    ) -> None:
         # The OpenCode server adapter never advertises attachment support
         # (attachments are reported as UnavailableCapability), so this path is
         # unreachable from the frontend. Raise a clear error if invoked anyway.
@@ -634,7 +636,9 @@ class OpenCodeServerAdapter(AgentAdapter):
     def set_suggestions_evaluator(self, evaluator: Any) -> None:
         """No-op: the HTTP+SSE server adapter does not support the suggestions pipeline."""
 
-    def fire_suggestions(self, ctx: Any) -> None:
+    def fire_suggestions(
+        self, user_text: str = "", turn_id: str = "", message_id: str = ""
+    ) -> None:
         """No-op: the HTTP+SSE server adapter does not support the suggestions pipeline."""
 
     # -- internals --------------------------------------------------------------
@@ -816,7 +820,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                 if emitter is not None:
                     await self._close_open_part()
                     await emitter({"type": "done"})
-                    self.fire_suggestions(None)
+                    self.fire_suggestions()
             return True
 
         if event_type == "session.error":

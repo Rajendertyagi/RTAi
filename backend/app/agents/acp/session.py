@@ -210,7 +210,7 @@ class AcpSession(AgentAdapter):
             self._owned = None
             raise
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         if not self._connection or not self._session_id:
             raise RuntimeError("ACP session is not ready")
         from acp import text_block
@@ -234,9 +234,11 @@ class AcpSession(AgentAdapter):
         )
         await self._close_open_part()
         await self._send({"type": "done"})
-        self._fire_suggestions(text)
+        self._fire_suggestions(text, turn_id, message_id)
 
-    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+    async def submit_prompt_content(
+        self, content: list[PromptContent], turn_id: str = "", message_id: str = ""
+    ) -> None:
         """Send a multi-block prompt with validated attachments.
 
         Converts RTAI domain blocks to ACP SDK ContentBlock objects, checks
@@ -355,7 +357,7 @@ class AcpSession(AgentAdapter):
         )
         await self._close_open_part()
         await self._send({"type": "done"})
-        self._fire_suggestions("")
+        self._fire_suggestions("", turn_id, message_id)
 
     async def cancel(self) -> None:
         if self._connection and self._session_id:
@@ -398,14 +400,14 @@ class AcpSession(AgentAdapter):
         """Inject a suggestion evaluator at runtime (called by the WebSocket route)."""
         self._suggestions.set_evaluator(evaluator or NoOpSuggestionEvaluator())
 
-    def _fire_suggestions(self, user_text: str) -> None:
+    def _fire_suggestions(self, user_text: str, turn_id: str = "", message_id: str = "") -> None:
         """Build a TurnContext and fire the suggestion bus after a turn completes."""
         if not self._initialized or not user_text.strip():
             return
         ctx = TurnContext(
             session_id=self._session_id or "",
-            turn_id="",
-            message_id="",
+            turn_id=turn_id,
+            message_id=message_id,
             user_text=user_text,
             agent_name=self._agent_title or self._agent_name or "agent",
             tool_call_count=len(self._seen_tool_calls),

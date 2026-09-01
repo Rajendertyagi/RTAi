@@ -51,6 +51,7 @@ export interface ChatStateData {
   messages: ChatMessage[];
   activeTurnId: string | null;
   activeMessageId: string | null;
+  completedTurnId: string | null;
 
   // Capabilities (runtime-discovered, never hardcoded)
   agents: CapabilityItem[];
@@ -92,6 +93,10 @@ export interface ChatStateData {
   // Populated by part_start / part_delta / part_done events and consumed
   // by convertMessage so assistant-ui can render them as reasoning parts.
   reasoningParts: Map<string, Map<string, string>>;
+
+  // Dynamic suggestions emitted by the backend after each turn completes.
+  // Cleared on resetSession; replaced with latest turn's suggestions.
+  suggestions: Array<{ title: string; prompt: string }>;
 }
 
 export interface ChatStateActions {
@@ -173,6 +178,8 @@ const initialState: ChatStateData = {
   pendingPermissions: new Map(),
   autoApprove: false,
   reasoningParts: new Map(),
+  suggestions: [],
+  completedTurnId: null,
 };
 
 // Index of the assistant message the current turn is streaming into, or -1.
@@ -222,7 +229,7 @@ export const useChatStore = create<ChatState>()(
               if (state.activeTurnId !== null || state.promptRequestId !== null) {
                 set(clearTurnState);
               }
-              set({ reasoningParts: new Map() });
+              set({ reasoningParts: new Map(), completedTurnId: null, suggestions: [] });
             }
             break;
           }
@@ -405,7 +412,7 @@ export const useChatStore = create<ChatState>()(
               event.session_id === state.sessionId &&
               event.turn_id === state.turnId
             ) {
-              set(clearTurnState);
+              set({ ...clearTurnState, completedTurnId: event.turn_id });
             }
             break;
 
@@ -592,6 +599,17 @@ export const useChatStore = create<ChatState>()(
             }
             break;
 
+          case "suggestions_available":
+            // Accept suggestions for the active turn or the immediately
+            // preceding completed turn; reject older turns.
+            if (event.session_id !== state.sessionId) break;
+            if (
+              event.turn_id !== state.turnId &&
+              event.turn_id !== state.completedTurnId
+            ) break;
+            set({ suggestions: event.items, completedTurnId: event.turn_id });
+            break;
+
           case "warning":
             // Diagnostics only — surfaced by toast/error UI elsewhere.
             console.warn("[RTAI]", event.type, event.message);
@@ -616,6 +634,7 @@ export const useChatStore = create<ChatState>()(
                 cancelPending: false,
                 cancelError: null,
                 lastError: { code: event.code, message: event.message },
+                completedTurnId: event.turn_id,
               });
             } else if (!event.code) {
               // No turn correlation and no code — surface it as a standalone
@@ -707,7 +726,7 @@ export const useChatStore = create<ChatState>()(
 
       setAutoApprove: (on) => set({ autoApprove: on }),
 
-      resetSession: () =>
+       resetSession: () =>
         set({
           sessionId: generateId(),
           turnId: "",
@@ -719,11 +738,13 @@ export const useChatStore = create<ChatState>()(
           messages: [],
           activeTurnId: null,
           activeMessageId: null,
+          completedTurnId: null,
           pendingSelections: new Map(),
           lastError: null,
           pendingPermissions: new Map(),
           autoApprove: false,
           reasoningParts: new Map(),
+          suggestions: [],
         }),
     }),
     { name: "RTAI Chat Store" },

@@ -436,7 +436,26 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
     # Suggestions bus — attached to the adapter so each turn can fire
     # non-blocking follow-up evaluation after completion.
     from ..agents.suggestions import SuggestionEventBus
-    suggestions_bus = SuggestionEventBus()
+    from typing import Any, Callable
+
+    def _emit_suggestion_events(
+        emit_fn: Callable[..., Awaitable[None]],
+    ) -> Callable[..., Awaitable[None]]:
+        """Return an async callback that batches suggestions into one event."""
+        async def _on_suggestions(session_id: str, turn_id: str, prompts: list[str]) -> None:
+            if not prompts:
+                return
+            await emit_fn(
+                {
+                    "type": "suggestions_available",
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "items": [{"title": p, "prompt": p} for p in prompts],
+                }
+            )
+        return _on_suggestions
+
+    suggestions_bus = SuggestionEventBus(on_suggestions=_emit_suggestion_events(emit))
     adapter.set_suggestions_evaluator(suggestions_bus)
 
     try:
@@ -632,7 +651,7 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                                                 f"attachment rejected: {b.kind.value} "
                                                 f"not supported by this agent"
                                             )
-                                    await adapter.submit_prompt_content(blocks)
+                                    await adapter.submit_prompt_content(blocks, turn_id=_turn_id, message_id=msg_id)
                                 else:
                                     # Provider advertises no attachment types — fall back
                                     # to text-only if the only block is text.
@@ -641,7 +660,9 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                                         and _prompt_blocks_raw[0].get("kind") == "text"
                                     ):
                                         await adapter.submit_prompt(
-                                            _prompt_blocks_raw[0].get("text", "") or ""
+                                            _prompt_blocks_raw[0].get("text", "") or "",
+                                            turn_id=_turn_id,
+                                            message_id=msg_id,
                                         )
                                     else:
                                         raise RuntimeError(
@@ -654,7 +675,9 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                                     and _prompt_blocks_raw[0].get("kind") == "text"
                                 ):
                                     await adapter.submit_prompt(
-                                        _prompt_blocks_raw[0].get("text", "") or ""
+                                        _prompt_blocks_raw[0].get("text", "") or "",
+                                        turn_id=_turn_id,
+                                        message_id=msg_id,
                                     )
                                 else:
                                     raise RuntimeError("attachments not available for this agent")
@@ -662,7 +685,7 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
                             # Legacy text-only path.
                             if not _text:
                                 raise RuntimeError("text is required when prompt is not provided")
-                            await adapter.submit_prompt(_text)
+                            await adapter.submit_prompt(_text, turn_id=_turn_id, message_id=msg_id)
                         # Task completes when submit_prompt returns: all deltas sent,
                         # done emitted, prompt() awaited. No sleep needed.
                     except asyncio.CancelledError:
@@ -1016,6 +1039,8 @@ async def chat_socket(websocket: WebSocket, cwd: str | None = Query(default=None
         log_event(logger, logging.INFO, "connection_closing")
         if prompt_task and not prompt_task.done():
             prompt_task.cancel()
+        with contextlib.suppress(Exception):
+            await suggestions_bus.cancel_all()
         with contextlib.suppress(Exception):
             await adapter.close()
         log_event(logger, logging.INFO, "adapter_cleanup")

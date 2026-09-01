@@ -335,6 +335,25 @@ emits exactly one `done` with `reason: "cancelled"`; it does not emit a
 separate `cancelled` frame and does not emit a generic handler `error` after a
 successful cancellation.
 
+### suggestions_available
+
+| | |
+|---|---|
+| Direction | backend → ui |
+| Required | `session_id`, `turn_id`, `items`: array of `{title, prompt}` |
+| Optional | envelope extras |
+
+```json
+{"protocol_version": 1, "type": "suggestions_available",
+ "session_id": "session-3", "turn_id": "turn-7",
+ "items": [{"title": "Follow up on X", "prompt": "Tell me more about X"}]}
+```
+
+UI: populate the dynamic suggestions dropdown. One event per turn. The UI
+accepts suggestions whose `turn_id` matches either the active turn or the
+most recently completed turn; older turns are discarded. Not persisted to
+history.
+
 ### tool_start
 
 | | |

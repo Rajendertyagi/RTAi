@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -73,12 +74,33 @@ class SuggestionEventBus:
     never lets an exception propagate back to the stream path.
     """
 
-    def __init__(self, evaluator: AbstractSuggestionEvaluator | None = None) -> None:
+    def __init__(
+        self,
+        evaluator: AbstractSuggestionEvaluator | None = None,
+        on_suggestions: Callable[..., Awaitable[None]] | None = None,
+    ) -> None:
         self._evaluator = evaluator or NoOpSuggestionEvaluator()
+        self._on_suggestions = on_suggestions
+        self._task_refs: set[asyncio.Task] = set()
 
     def set_evaluator(self, evaluator: AbstractSuggestionEvaluator) -> None:
         """Replace the active evaluator at runtime (useful in tests)."""
         self._evaluator = evaluator
+
+    async def cancel_all(self) -> None:
+        """Cancel all in-flight suggestion tasks and wait for them to settle.
+
+        Tasks are copied to a list first so that completion callbacks
+        (which discard themselves from ``_task_refs``) cannot mutate the
+        set being processed.
+        """
+        tasks = list(self._task_refs)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if self._task_refs:
+            await asyncio.gather(*self._task_refs, return_exceptions=True)
+        self._task_refs.clear()
 
     def fire_on_turn_completed(self, ctx: TurnContext) -> None:
         """Schedule non-blocking suggestion evaluation.
@@ -92,13 +114,11 @@ class SuggestionEventBus:
         async def _run() -> None:
             try:
                 suggestions = await self._evaluator.evaluate(ctx)
-                if suggestions:
-                    logger.debug(
-                        "suggestions_emitted",
-                        turn_id=ctx.turn_id,
-                        count=len(suggestions),
-                    )
+                if suggestions and self._on_suggestions:
+                    await self._on_suggestions(ctx.session_id, ctx.turn_id, suggestions)
             except Exception:
                 logger.exception("suggestion_evaluation_failed")
 
-        asyncio.get_running_loop().create_task(_run())
+        task = asyncio.get_running_loop().create_task(_run())
+        self._task_refs.add(task)
+        task.add_done_callback(self._task_refs.discard)
