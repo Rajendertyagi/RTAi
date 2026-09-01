@@ -702,15 +702,13 @@ export const useChatStore = create<ChatState>()(
 
             const content = [...found.msg.content];
             if (part.type === "text") {
-              content[contentIndex] = {
-                ...part,
+              content[contentIndex] = Object.assign({}, part, {
                 text: part.text + event.text,
-              };
+              });
             } else if (part.type === "reasoning") {
-              content[contentIndex] = {
-                ...part,
+              content[contentIndex] = Object.assign({}, part, {
                 text: part.text + event.text,
-              };
+              });
             } else {
               break;
             }
