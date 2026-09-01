@@ -151,6 +151,166 @@ class SuggestionEventBusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.call_count, 1)
         self.assertEqual(first.call_count, 0)
 
+    async def test_callback_is_awaited(self) -> None:
+        """The route callback is async and must be awaited by the bus."""
+        called = asyncio.Event()
+
+        async def async_callback(session_id, turn_id, prompts):
+            await asyncio.sleep(0.02)
+            called.set()
+
+        bus = SuggestionEventBus(evaluator=CountingEvaluator(), on_suggestions=async_callback)
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="s1", turn_id="t1", message_id="m1",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        # Without await, called would still be unset immediately.
+        self.assertFalse(called.is_set())
+        await asyncio.sleep(0.05)
+        self.assertTrue(called.is_set())
+
+    async def test_single_batch_event(self) -> None:
+        """Multiple prompts produce exactly one suggestions_available event."""
+        emitted: list[dict[str, Any]] = []
+
+        async def collect(_sid: str, _tid: str, _prompts: list[str]) -> None:
+            emitted.append({"type": "suggestions_available", "items": _prompts})
+
+        bus = SuggestionEventBus(
+            evaluator=CountingEvaluator(suggestions=["a", "b", "c"]),
+            on_suggestions=collect,
+        )
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="s1", turn_id="t1", message_id="m1",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["type"], "suggestions_available")
+
+    async def test_event_has_normalized_envelope(self) -> None:
+        """Batched event carries protocol_version, timestamp, session/turn ids."""
+        emitted: list[dict[str, Any]] = []
+
+        async def collect(session_id: str, turn_id: str, prompts: list[str]) -> None:
+            emitted.append({
+                "type": "suggestions_available",
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "protocol_version": 1,
+                "timestamp": 1234567890,
+                "items": [{"title": p, "prompt": p} for p in prompts],
+            })
+
+        bus = SuggestionEventBus(
+            evaluator=CountingEvaluator(suggestions=["x"]),
+            on_suggestions=collect,
+        )
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="sess-1", turn_id="turn-7", message_id="msg-3",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(emitted), 1)
+        ev = emitted[0]
+        self.assertEqual(ev["session_id"], "sess-1")
+        self.assertEqual(ev["turn_id"], "turn-7")
+        self.assertIn("protocol_version", ev)
+        self.assertIn("timestamp", ev)
+        self.assertIsInstance(ev["timestamp"], int)
+
+    async def test_multiple_items_preserved(self) -> None:
+        """All evaluator items appear in the single batched items array."""
+        emitted: list[dict[str, Any]] = []
+
+        async def collect(_sid: str, _tid: str, prompts: list[str]) -> None:
+            emitted.append({
+                "type": "suggestions_available",
+                "items": [{"title": p, "prompt": p} for p in prompts],
+            })
+
+        bus = SuggestionEventBus(
+            evaluator=CountingEvaluator(suggestions=["a", "b", "c"]),
+            on_suggestions=collect,
+        )
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="s1", turn_id="t1", message_id="m1",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(emitted), 1)
+        items = emitted[0]["items"]
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["title"], "a")
+        self.assertEqual(items[0]["prompt"], "a")
+        self.assertEqual(items[1]["prompt"], "b")
+        self.assertEqual(items[2]["title"], "c")
+
+    async def test_empty_result_emits_nothing(self) -> None:
+        """No callback invocation when evaluator returns an empty list."""
+        call_count = 0
+
+        async def counting_callback(*args):
+            nonlocal call_count
+            call_count += 1
+
+        bus = SuggestionEventBus(
+            evaluator=NoOpSuggestionEvaluator(),
+            on_suggestions=counting_callback,
+        )
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="s1", turn_id="t1", message_id="m1",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        await asyncio.sleep(0.05)
+        self.assertEqual(call_count, 0)
+
+    async def test_cancel_all_cancels_and_awaits(self) -> None:
+        """cancel_all cancels outstanding tasks and awaits them to settle."""
+        on_invoke = asyncio.Event()
+        was_cancelled = False
+
+        class SlowEvaluator(AbstractSuggestionEvaluator):
+            async def evaluate(self, ctx):
+                nonlocal was_cancelled
+                on_invoke.set()
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    was_cancelled = True
+                    raise
+
+        bus = SuggestionEventBus(evaluator=SlowEvaluator())
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="s1", turn_id="t1", message_id="m1",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        await on_invoke.wait()
+        self.assertTrue(len(bus._task_refs) > 0)
+        await bus.cancel_all()
+        self.assertTrue(was_cancelled)
+        self.assertEqual(len(bus._task_refs), 0)
+
+    async def test_legacy_suggestion_type_not_emitted(self) -> None:
+        """The pipeline emits 'suggestions_available', never the legacy singular type."""
+        emitted: list[dict[str, Any]] = []
+
+        async def collect(_sid: str, _tid: str, _prompts: list[str]) -> None:
+            emitted.append({"type": "suggestions_available", "items": []})
+
+        bus = SuggestionEventBus(
+            evaluator=CountingEvaluator(suggestions=["x"]),
+            on_suggestions=collect,
+        )
+        bus.fire_on_turn_completed(TurnContext(
+            session_id="s1", turn_id="t1", message_id="m1",
+            user_text="hello", agent_name="agent", tool_call_count=0,
+        ))
+        await asyncio.sleep(0.05)
+        types = {e.get("type") for e in emitted}
+        self.assertNotIn("suggestion", types)
+        self.assertIn("suggestions_available", types)
+
 
 # ---------------------------------------------------------------------------
 # AcpSession suggestion + MCP tests
