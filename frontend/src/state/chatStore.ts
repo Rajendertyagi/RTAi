@@ -700,9 +700,20 @@ export const useChatStore = create<ChatState>()(
             // Narrow to text or reasoning before reading/updating .text.
             if (part.type !== "text" && part.type !== "reasoning") break;
 
-            const newText = part.text + event.text;
             const content = [...found.msg.content];
-            content[contentIndex] = { ...part, text: newText };
+            if (part.type === "text") {
+              content[contentIndex] = {
+                ...part,
+                text: part.text + event.text,
+              };
+            } else if (part.type === "reasoning") {
+              content[contentIndex] = {
+                ...part,
+                text: part.text + event.text,
+              };
+            } else {
+              break;
+            }
             const updatedMsg: AssistantChatMessage = { ...found.msg, content };
             set({
               messages: state.messages.map((m, i) =>
