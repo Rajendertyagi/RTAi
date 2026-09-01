@@ -71,12 +71,12 @@ class StreamingFakeAdapter(AgentAdapter):
     def capability_snapshot(self) -> CapabilitySnapshot:
         return _snapshot()
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         assert self._emit is not None
         await self._emit({"type": "delta", "text": SECRET_DELTA})
         await self._emit({"type": "done"})
 
-    async def submit_prompt_content(self, content: list[Any]) -> None:
+    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
         pass
 
     async def cancel(self) -> None:
@@ -92,7 +92,7 @@ class StreamingFakeAdapter(AgentAdapter):
 class QuietFakeAdapter(StreamingFakeAdapter):
     """Emits nothing for a prompt; used for cancel/disconnect flows."""
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         # Hold long enough for a cancel command to arrive and interrupt us.
         await asyncio.sleep(10)
 
@@ -100,7 +100,7 @@ class QuietFakeAdapter(StreamingFakeAdapter):
 class ErrorFakeAdapter(StreamingFakeAdapter):
     """Raises an exception whose message must never reach the logs."""
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         raise RuntimeError(SECRET_ERROR)
 
 

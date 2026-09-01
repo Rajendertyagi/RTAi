@@ -48,11 +48,11 @@ class BlockingAdapter(AgentAdapter):
     def capability_snapshot(self) -> CapabilitySnapshot:
         return self._snap
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         # Block until cancelled — simulates long-running LLM call
         await asyncio.sleep(3600)
 
-    async def submit_prompt_content(self, content: list[Any]) -> None:
+    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
         await self.submit_prompt("")
 
     async def cancel(self) -> None:
@@ -95,12 +95,12 @@ class TerminalAdapter(AgentAdapter):
     def capability_snapshot(self) -> CapabilitySnapshot:
         return self._snap
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         # Complete immediately - the route's emit will add session_id/turn_id
         if self._emit is not None:
             await self._emit({"type": "done", "reason": "completed"})
 
-    async def submit_prompt_content(self, content: list[Any]) -> None:
+    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
         pass
 
     async def cancel(self) -> None:

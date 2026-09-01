@@ -94,10 +94,10 @@ class RecordingAdapter(AgentAdapter):
     def capability_snapshot(self) -> CapabilitySnapshot:
         return self._snap
 
-    async def submit_prompt(self, text: str) -> None:
+    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         self.submitted_texts.append(text)
 
-    async def submit_prompt_content(self, content: list[Any]) -> None:
+    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
         self.submitted_contents.append(content)
 
     async def cancel(self) -> None:
