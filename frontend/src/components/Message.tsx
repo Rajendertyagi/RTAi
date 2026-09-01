@@ -4,7 +4,6 @@ import {
   MessagePrimitive,
   groupPartByType,
   ActionBarPrimitive,
-  type TextMessagePartProps,
   type ThreadMessage,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
@@ -15,7 +14,7 @@ import { ThinkingAccordion } from "./ThinkingAccordion";
 // MarkdownTextPrimitive reads text from React context (TextMessagePartProvider)
 // and its props are incompatible with TextMessagePartProps. We must not spread
 // the part props instead render it without props so it reads from context.
-function MarkdownTextWrapper(_props?: TextMessagePartProps) {
+function MarkdownTextWrapper() {
   return (
     <div className="text-[0.9375rem] leading-relaxed text-surface-foreground overflow-wrap-break-word">
       <MarkdownTextPrimitive />
