@@ -1,16 +1,14 @@
-import type { ThreadSuggestion } from "@assistant-ui/react";
-
 /**
  * Static welcome-screen suggestions for the empty-state launcher.
  *
- * Uses Assistant UI's native `ThreadSuggestion` shape:
+ * Uses Assistant UI's `SuggestionConfig` shape:
  * `{ title: string; label: string; prompt: string }`.
  *
  * Categories, descriptions, and runtime skill integration are not yet
  * included — keep this list basic. Extend by appending to the array;
  * ChatScreen renders all entries without code changes.
  */
-export const WELCOME_SUGGESTIONS: ThreadSuggestion[] = [
+export const WELCOME_SUGGESTIONS = [
   {
     title: "Explain code",
     label: "step-by-step walkthrough",
