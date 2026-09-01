@@ -46,6 +46,7 @@ export const ToolCard: ToolCallMessagePartComponent = ({
   status,
   result,
   toolName,
+  isError,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const Icon = getToolIcon(toolName);
@@ -74,8 +75,12 @@ export const ToolCard: ToolCallMessagePartComponent = ({
       ? JSON.stringify(result, null, 2).slice(0, 500)
       : "";
 
+  const isToolError = isError === true;
+
   return (
-    <div className="my-2 rounded-lg border border-tools-border bg-tools-background overflow-hidden">
+    <div
+      className={`my-2 rounded-lg border overflow-hidden ${isToolError ? "border-status-error/30 bg-status-error-background" : "border-tools-border bg-tools-background"}`}
+    >
       {/* Collapsed row */}
       <button
         type="button"
@@ -112,7 +117,11 @@ export const ToolCard: ToolCallMessagePartComponent = ({
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-1.5 text-xs text-surface-muted-foreground">
             <span>{toolName}</span>
-            <span className="capitalize">{status?.type ?? "running"}</span>
+            <span
+              className={`capitalize ${isToolError ? "text-status-error" : ""}`}
+            >
+              {isToolError ? "Error" : (status?.type ?? "running")}
+            </span>
           </div>
 
           {/* Args */}
@@ -126,8 +135,12 @@ export const ToolCard: ToolCallMessagePartComponent = ({
 
           {/* Result */}
           {resultText && (
-            <div className="border-t border-interactive">
-              <pre className="overflow-x-auto p-3 text-sm font-mono text-surface-foreground">
+            <div
+              className={`border-t ${isToolError ? "border-status-error/30" : "border-interactive"}`}
+            >
+              <pre
+                className={`overflow-x-auto p-3 text-sm font-mono ${isToolError ? "text-status-error" : "text-surface-foreground"}`}
+              >
                 {resultText}
               </pre>
             </div>

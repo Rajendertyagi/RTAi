@@ -5,6 +5,8 @@ import {
   useExternalStoreRuntime,
   AuiConfig,
   Suggestions,
+  type ThreadMessageLike,
+  type ThreadUserMessagePart,
 } from "@assistant-ui/react";
 import { useEffect, useRef, type ReactNode } from "react";
 import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
@@ -23,6 +25,8 @@ import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
 const RTAI_CONFIG = AuiConfig({
   suggestions: Suggestions(WELCOME_SUGGESTIONS),
 });
+
+const convertMessage = (msg: ChatMessage): ThreadMessageLike => msg;
 
 export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   // Subscribe to store
@@ -60,15 +64,18 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   // T is inferred as ChatMessage from the messages selector.
   // setMessages receives readonly ChatMessage[] per the ExternalStoreAdapter
   // contract — no cast needed.
+  // convertMessage is required because ChatMessage does not extend
+  // ThreadMessage; the identity converter is valid since ChatMessage already
+  // satisfies ThreadMessageLike.
   const runtime = useExternalStoreRuntime({
     messages,
     setMessages: (msgs) => {
       useChatStore.getState().setMessages(msgs);
     },
+    convertMessage,
     isRunning,
     onNew: async (message) => {
-      // Only user-authored messages are sent as prompts. This also narrows
-      // AppendMessage's role-discriminated content to ThreadUserMessagePart[].
+      // Only user-authored messages are sent as prompts.
       if (message.role !== "user") return;
       const text =
         message.content[0]?.type === "text" ? message.content[0].text : "";
@@ -88,10 +95,13 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
 
       // Build optimistic messages. User content and attachments are preserved
       // verbatim from the AppendMessage so the attachment pipeline is intact.
+      // AppendMessage is not a discriminated union, so the role guard above
+      // cannot narrow content at the type level; the cast is safe because the
+      // runtime only delivers user-role messages with user content here.
       const userMsg: ChatMessage = {
         role: "user",
         id: newMessageId,
-        content: message.content,
+        content: message.content as readonly ThreadUserMessagePart[],
         attachments: message.attachments,
         createdAt: new Date(),
       };
