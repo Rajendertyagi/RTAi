@@ -52,7 +52,9 @@ class BlockingAdapter(AgentAdapter):
         # Block until cancelled — simulates long-running LLM call
         await asyncio.sleep(3600)
 
-    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
+    async def submit_prompt_content(
+        self, content: list[Any], turn_id: str = "", message_id: str = ""
+    ) -> None:
         await self.submit_prompt("")
 
     async def cancel(self) -> None:
@@ -100,7 +102,9 @@ class TerminalAdapter(AgentAdapter):
         if self._emit is not None:
             await self._emit({"type": "done", "reason": "completed"})
 
-    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
+    async def submit_prompt_content(
+        self, content: list[Any], turn_id: str = "", message_id: str = ""
+    ) -> None:
         pass
 
     async def cancel(self) -> None:

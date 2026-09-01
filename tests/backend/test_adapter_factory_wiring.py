@@ -37,7 +37,9 @@ class FakeAdapter(AgentAdapter):
         if self.prompt_behavior == "explode":
             raise RuntimeError("provider exploded")
 
-    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
+    async def submit_prompt_content(
+        self, content: list[Any], turn_id: str = "", message_id: str = ""
+    ) -> None:
         pass
 
     async def cancel(self) -> None:
@@ -98,7 +100,9 @@ class FinishPromptCompatTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancellation_emits_cancelled_and_reraises(self) -> None:
         class CancelledAdapter(FakeAdapter):
-            async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
+            async def submit_prompt(
+                self, text: str, turn_id: str = "", message_id: str = ""
+            ) -> None:
                 self.prompts.append(text)
                 raise asyncio.CancelledError()
 

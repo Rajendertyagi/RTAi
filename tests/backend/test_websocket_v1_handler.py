@@ -51,7 +51,9 @@ class FakeAdapter(AgentAdapter):
     async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
         pass
 
-    async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
+    async def submit_prompt_content(
+        self, content: list[Any], turn_id: str = "", message_id: str = ""
+    ) -> None:
         pass
 
     async def cancel(self) -> None:
@@ -260,10 +262,14 @@ class WebSocketV1Tests(unittest.IsolatedAsyncioTestCase):
                     thinking_options=CapabilitySection(items=()),
                 )
 
-            async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
+            async def submit_prompt(
+                self, text: str, turn_id: str = "", message_id: str = ""
+            ) -> None:
                 pass
 
-            async def submit_prompt_content(self, content: list[Any], turn_id: str = "", message_id: str = "") -> None:
+            async def submit_prompt_content(
+                self, content: list[Any], turn_id: str = "", message_id: str = ""
+            ) -> None:
                 pass
 
             async def cancel(self) -> None:

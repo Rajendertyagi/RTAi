@@ -15,9 +15,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from app.agents.acp.session import AcpSession
-from app.agents.opencode_acp import OpenCodeSession
 from app.agents.opencode.server_adapter import OpenCodeServerAdapter
+from app.agents.opencode_acp import OpenCodeSession
 from app.agents.suggestions import (
     AbstractSuggestionEvaluator,
     NoOpSuggestionEvaluator,
@@ -25,7 +24,6 @@ from app.agents.suggestions import (
     TurnContext,
 )
 from app.core.protocol import MCPServerConfig
-
 
 # ---------------------------------------------------------------------------
 # MCPServerConfig tests
@@ -433,7 +431,11 @@ class AcpSessionSuggestionTests(unittest.IsolatedAsyncioTestCase):
         install_fake_acp(context)
         session = OpenCodeSession()
         session._mcp_servers = [
-            MCPServerConfig(name="files", command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]),
+            MCPServerConfig(
+                name="files",
+                command="npx",
+                args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            ),
         ]
         emitted: list[dict[str, Any]] = []
         await session.start(self.cwd, emit=emitted.append)
@@ -443,7 +445,10 @@ class AcpSessionSuggestionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(mcp_arg), 1)
             self.assertEqual(mcp_arg[0]["name"], "files")
             self.assertEqual(mcp_arg[0]["command"], "npx")
-            self.assertEqual(mcp_arg[0]["args"], ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"])
+            self.assertEqual(
+                mcp_arg[0]["args"],
+                ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            )
         finally:
             await session.close()
 
