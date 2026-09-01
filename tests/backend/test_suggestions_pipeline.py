@@ -388,6 +388,11 @@ def install_fake_acp(context: FakeContext) -> None:
 class AcpSessionSuggestionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.cwd = Path(".").resolve()
+        self._which_patch = mock.patch(
+            "shutil.which", return_value="C:/fake/bin/opencode.exe"
+        )
+        self._which_patch.start()
+        self.addCleanup(self._which_patch.stop)
 
     async def test_suggestions_evaluator_is_no_op_by_default(self) -> None:
         context = FakeContext(FakeConnection(), FakeProcess())
