@@ -15,7 +15,7 @@ import { ThinkingAccordion } from "./ThinkingAccordion";
 // MarkdownTextPrimitive reads text from React context (TextMessagePartProvider)
 // and its props are incompatible with TextMessagePartProps. We must not spread
 // the part props instead render it without props so it reads from context.
-function MarkdownTextWrapper(_props: TextMessagePartProps) {
+function MarkdownTextWrapper(_props?: TextMessagePartProps) {
   return (
     <div className="text-[0.9375rem] leading-relaxed text-surface-foreground overflow-wrap-break-word">
       <MarkdownTextPrimitive />
@@ -86,20 +86,13 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
           autohideFloat="single-branch"
           className="absolute -top-2 -right-2 flex rounded-lg shadow-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
         >
-          <ActionBarPrimitive.Copy copiedDuration={2000}>
-            {({ copied }) => (
-              <button
-                type="button"
-                aria-label={copied ? "Copied" : "Copy message"}
-                className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-elevated border border-border text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
-              >
-                {copied ? (
-                  <Check className="h-3.5 w-3.5 text-status-success" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </button>
-            )}
+          <ActionBarPrimitive.Copy
+            copiedDuration={2000}
+            aria-label="Copy message"
+            className="group flex h-7 w-7 items-center justify-center rounded-md bg-surface-elevated border border-border text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
+          >
+            <Check className="h-3.5 w-3.5 text-status-success hidden group-data-[copied=true]:block" />
+            <Copy className="h-3.5 w-3.5 group-data-[copied=true]:hidden" />
           </ActionBarPrimitive.Copy>
         </ActionBarPrimitive.Root>
       </div>
