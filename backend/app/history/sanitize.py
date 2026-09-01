@@ -24,7 +24,9 @@ _TRUSTED_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "delta": frozenset({"type", "session_id", "turn_id", "message_id", "sequence", "text"}),
-    "part_start": frozenset({"type", "session_id", "turn_id", "message_id", "part_id", "part_type"}),
+    "part_start": frozenset(
+        {"type", "session_id", "turn_id", "message_id", "part_id", "part_type"}
+    ),
     "part_delta": frozenset({"type", "session_id", "turn_id", "message_id", "part_id", "text"}),
     "part_done": frozenset({"type", "session_id", "turn_id", "message_id", "part_id"}),
     "done": frozenset({"type", "session_id", "turn_id", "reason"}),

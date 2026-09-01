@@ -34,7 +34,6 @@ from ...core.protocol import (
 )
 from ...logging_config import log_event, short_id
 from ..base import AgentAdapter, Emit, SelectionKind, SelectionResult
-from ..suggestions import AbstractSuggestionEvaluator, SuggestionEventBus, TurnContext
 from ..capabilities import (
     AgentDescriptor,
     AttachmentCapabilities,
@@ -115,10 +114,6 @@ class AcpSession(AgentAdapter):
         self._open_part_id: str | None = None
         self._open_part_kind: str | None = None
         self._part_seq = 0
-        # Suggestions pipeline — injected by the WebSocket route after
-        # adapter creation. Default no-op keeps the path safe for adapters
-        # that do not use it (e.g. the HTTP+SSE server adapter).
-        self._suggestions = SuggestionEventBus()
         # Optional MCP servers to attach at session creation time.
         # Passed through to ACP new_session() when present.
         self._mcp_servers: list[MCPServerConfig] | None = None
@@ -210,7 +205,7 @@ class AcpSession(AgentAdapter):
             self._owned = None
             raise
 
-    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
+    async def submit_prompt(self, text: str) -> None:
         if not self._connection or not self._session_id:
             raise RuntimeError("ACP session is not ready")
         from acp import text_block
@@ -234,11 +229,8 @@ class AcpSession(AgentAdapter):
         )
         await self._close_open_part()
         await self._send({"type": "done"})
-        self._fire_suggestions(text, turn_id, message_id)
 
-    async def submit_prompt_content(
-        self, content: list[PromptContent], turn_id: str = "", message_id: str = ""
-    ) -> None:
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
         """Send a multi-block prompt with validated attachments.
 
         Converts RTAI domain blocks to ACP SDK ContentBlock objects, checks
@@ -357,7 +349,6 @@ class AcpSession(AgentAdapter):
         )
         await self._close_open_part()
         await self._send({"type": "done"})
-        self._fire_suggestions("", turn_id, message_id)
 
     async def cancel(self) -> None:
         if self._connection and self._session_id:
@@ -395,25 +386,6 @@ class AcpSession(AgentAdapter):
 
     def owned_process(self) -> OwnedProcess | None:
         return self._owned
-
-    def set_suggestions_evaluator(self, evaluator: AbstractSuggestionEvaluator | None) -> None:
-        """Inject a suggestion evaluator at runtime (called by the WebSocket route)."""
-        self._suggestions.set_evaluator(evaluator or NoOpSuggestionEvaluator())
-
-    def _fire_suggestions(self, user_text: str, turn_id: str = "", message_id: str = "") -> None:
-        """Build a TurnContext and fire the suggestion bus after a turn completes."""
-        if not self._initialized or not user_text.strip():
-            return
-        ctx = TurnContext(
-            session_id=self._session_id or "",
-            turn_id=turn_id,
-            message_id=message_id,
-            user_text=user_text,
-            agent_name=self._agent_title or self._agent_name or "agent",
-            tool_call_count=len(self._seen_tool_calls),
-            part_kinds=[],
-        )
-        self._suggestions.fire_on_turn_completed(ctx)
 
     async def respond_to_permission(self, permission_request_id: str, option_id: str) -> bool:
         """Resolve a pending permission request with the user's choice.

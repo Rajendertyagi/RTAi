@@ -57,8 +57,6 @@ export type ServerEvent =
   | { type: "part_start"; session_id: string; turn_id: string; message_id: string; part_id: string; part_type: "text" | "reasoning" }
   | { type: "part_delta"; session_id: string; turn_id: string; message_id: string; part_id: string; text: string; sequence?: number }
   | { type: "part_done"; session_id: string; turn_id: string; message_id: string; part_id: string }
-  // Suggestions (batched, emitted after each turn completes)
-  | { type: "suggestions_available"; session_id: string; turn_id: string; items: Array<{ title: string; prompt: string }> }
   // Diagnostics
   | { type: "usage"; input_tokens?: number; output_tokens?: number }
   | { type: "queue_state"; pending: number }
@@ -188,7 +186,6 @@ export function isServerEvent(data: unknown): data is ServerEvent {
     "tool_start", "tool_update", "tool_result",
     "permission_request", "permission_result",
     "part_start", "part_delta", "part_done",
-    "suggestions_available",
     "command_result",
     "usage", "queue_state", "timing",
     "cancelled", "warning", "error", "raw",

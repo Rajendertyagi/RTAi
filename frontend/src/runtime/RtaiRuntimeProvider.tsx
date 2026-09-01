@@ -7,10 +7,11 @@ import {
   AuiConfig,
   Suggestions,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
 import { useRtaiSocket } from "../hooks/useRtaiSocket";
 import type { ClientCommand, ToolContentBlock } from "../types/protocol";
+import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
 
 // Minimal runtime provider that wires WebSocket events → assistant-ui store.
 //
@@ -19,6 +20,11 @@ import type { ClientCommand, ToolContentBlock } from "../types/protocol";
 // (defineToolkit) cannot cover them. Instead the UI passes a single fallback
 // renderer via <MessagePrimitive.Parts components={{ tools: { Fallback } }} />,
 // which handles every tool call that has no dedicated UI.
+
+const RTAI_CONFIG = AuiConfig({
+  suggestions: Suggestions(WELCOME_SUGGESTIONS),
+});
+
 export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   // Subscribe to store
   const messages = useChatStore((s) => s.messages);
@@ -26,7 +32,6 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const sessionId = useChatStore((s) => s.sessionId);
   const turnId = useChatStore((s) => s.turnId);
   const reasoningParts = useChatStore((s) => s.reasoningParts);
-  const suggestions = useChatStore((s) => s.suggestions);
   const setConnected = useChatStore((s) => s.setConnected);
   const handleMessage = useChatStore((s) => s.handleMessage);
   const registerSend = useChatStore((s) => s.registerSend);
@@ -134,8 +139,6 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         cancelError: null,
         pendingSelections: new Map(),
         lastError: null,
-        completedTurnId: null,
-        suggestions: [],
       });
 
       // Send prompt via socket
@@ -163,8 +166,6 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
           cancelError: null,
           activeTurnId: null,
           activeMessageId: null,
-          completedTurnId: null,
-          suggestions: [],
           lastError: {
             code: "send_failed",
             message: "Could not send prompt: connection unavailable",
@@ -214,23 +215,8 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
     return () => socket.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Build dynamic suggestions config from store — replaces static hardcoded list
-  const config = useMemo(
-    () =>
-      AuiConfig({
-        suggestions: Suggestions(
-          suggestions.map((s) => ({
-            title: s.title,
-            label: "",
-            prompt: s.prompt,
-          })),
-        ),
-      }),
-    [suggestions],
-  );
-
   return (
-    <AssistantRuntimeProvider runtime={runtime} config={config}>
+    <AssistantRuntimeProvider runtime={runtime} config={RTAI_CONFIG}>
       {children}
     </AssistantRuntimeProvider>
   );

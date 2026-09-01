@@ -91,12 +91,13 @@ export function ChatScreen({
               <p className="mt-2 text-sm text-muted-foreground">
                 Start a conversation with the AI assistant
               </p>
-              {/* Clickable suggestion pills */}
+              {/* Suggestion cards */}
               <div className="mt-6 grid w-full max-w-lg grid-cols-2 gap-2">
                 <ThreadPrimitive.Suggestions>
                   {() => (
                     <SuggestionPrimitive.Trigger
-                      send
+                      send={false}
+                      clearComposer={true}
                       className="flex flex-col items-start gap-1 rounded-xl border border-interactive bg-surface-elevated px-4 py-3 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
                     >
                       <span className="font-medium text-sm text-foreground">

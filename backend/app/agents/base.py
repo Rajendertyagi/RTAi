@@ -50,12 +50,12 @@ class AgentAdapter(ABC):
     def capability_snapshot(self) -> CapabilitySnapshot:
         """Return what this adapter discovered, without inventing data."""
 
-    async def submit_prompt(self, text: str, turn_id: str = "", message_id: str = "") -> None:
+    @abstractmethod
+    async def submit_prompt(self, text: str) -> None:
         """Send one user prompt; results arrive through the emit sink."""
 
-    async def submit_prompt_content(
-        self, content: list[PromptContent], turn_id: str = "", message_id: str = ""
-    ) -> None:
+    @abstractmethod
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
         """Send a multi-block prompt with validated attachments.
 
         Adapters that cannot accept attachments should raise a clear error;
@@ -73,29 +73,6 @@ class AgentAdapter(ABC):
     def owned_process(self) -> OwnedProcess | None:
         """The exact child this adapter spawned, if one exists."""
         return None
-
-    # ------------------------------------------------------------------
-    # Suggestions pipeline — injected by the WebSocket route after adapter
-    # creation. Adapters that support it call fire_suggestions() at the end
-    # of each turn; the bus runs the registered evaluator in the background.
-    # ------------------------------------------------------------------
-
-    def set_suggestions_evaluator(self, evaluator: Any) -> None:
-        """Inject a :class:`AbstractSuggestionEvaluator` at runtime.
-
-        The default no-op implementation means servers that do not yet use
-        the suggestions pipeline (e.g. the HTTP+SSE adapter) remain
-        unaffected. AcpSession overrides this to wire the bus.
-        """
-
-    def fire_suggestions(
-        self, user_text: str = "", turn_id: str = "", message_id: str = ""
-    ) -> None:
-        """Signal that the current turn has completed.
-
-        The default no-op means adapters that do not support the pipeline
-        remain unaffected. AcpSession overrides this to delegate to the bus.
-        """
 
     async def select(self, kind: SelectionKind, value_id: str) -> SelectionResult:
         raise NotImplementedError("Capability selection arrives in Phase 2A-B.")
