@@ -1,27 +1,48 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 import type {
+  ThreadMessageLike,
+  ThreadAssistantMessagePart,
+  ThreadUserMessagePart,
+  MessageStatus,
+  ToolCallMessagePartStatus,
+} from "@assistant-ui/react";
+import type {
   ServerEvent,
   ClientCommand,
   CapabilityItem,
   CommandItem,
   PermissionRequest,
-  ToolCall,
-  ToolCallStatus,
-  ToolStatus,
   UnavailableReason,
 } from "../types/protocol";
 
-// A single chat message in our backend format (before conversion to
-// assistant-ui's ThreadMessageLike). Exported so the runtime can type its
-// convertMessage callback against the raw external message shape.
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  tools: ToolCall[];
-  timestamp: number;
-}
+// Discriminated union of store message types derived from ThreadMessageLike.
+// User messages preserve ThreadUserMessagePart[] content and attachments;
+// assistant messages use ThreadAssistantMessagePart[] content for streaming.
+// The `role` discriminant lets TypeScript narrow content automatically.
+export type UserChatMessage = ThreadMessageLike & {
+  readonly role: "user";
+  readonly id: string;
+  readonly content: readonly ThreadUserMessagePart[];
+};
+
+export type AssistantChatMessage = ThreadMessageLike & {
+  readonly role: "assistant";
+  readonly id: string;
+  readonly content: readonly ThreadAssistantMessagePart[];
+};
+
+export type ChatMessage = UserChatMessage | AssistantChatMessage;
+
+// Tool-call part extracted from the official ThreadAssistantMessagePart union.
+type ToolPart = Extract<
+  ThreadAssistantMessagePart,
+  { type: "tool-call" }
+>;
+
+// Tool status derived from the pinned ToolCallMessagePartStatus.
+// All reason literals come from @assistant-ui/react@0.15.17.
+type ToolPartStatus = ToolCallMessagePartStatus;
 
 // A selection request awaiting authoritative confirmation from the backend.
 // Keyed in the store by the Protocol v1 `request_id` so multiple, distinct
@@ -87,10 +108,11 @@ export interface ChatStateData {
   // Per-session only (resets on resetSession); not persisted to localStorage.
   autoApprove: boolean;
 
-  // Accumulates streamed reasoning parts by (messageId → partId → text).
-  // Populated by part_start / part_delta / part_done events and consumed
-  // by convertMessage so assistant-ui can render them as reasoning parts.
-  reasoningParts: Map<string, Map<string, string>>;
+  // Content-part correlation: `${turn_id}:${part_id}` → contentIndex.
+  // Populated by part_start, used by part_delta/part_done, cleared on
+  // turn terminal / disconnect / reset. Preserves duplicate-start
+  // idempotence and permits late deltas.
+  partCorrelations: Map<string, number>;
 }
 
 export interface ChatStateActions {
@@ -105,6 +127,7 @@ export interface ChatStateActions {
   registerSend: (send: (cmd: ClientCommand) => void) => void;
   respondToPermission: (requestId: string, optionId: string) => void;
   setAutoApprove: (on: boolean) => void;
+  setMessages: (messages: readonly ChatMessage[]) => void;
   resetSession: () => void;
 }
 
@@ -171,21 +194,33 @@ const initialState: ChatStateData = {
   sendCommand: null,
   pendingPermissions: new Map(),
   autoApprove: false,
-  reasoningParts: new Map(),
+  partCorrelations: new Map(),
 };
 
-// Index of the assistant message the current turn is streaming into, or -1.
-// The turn's assistant message is created on the first delta/tool_start and
-// then tracked by activeMessageId, so later deltas append to it instead of
-// leaking into a previous turn's message.
-function findActiveAssistantIndex(
+// Find the assistant message for a turn by its deterministic ID.
+// Returns the message and its index, or null if not found.
+function findByTurnId(
   messages: ChatMessage[],
-  activeMessageId: string | null,
-): number {
-  if (!activeMessageId) return -1;
-  return messages.findIndex(
-    (m) => m.id === activeMessageId && m.role === "assistant",
+  turnId: string,
+): { msg: AssistantChatMessage; index: number } | null {
+  const index = messages.findIndex(
+    (m) => m.id === `asst-${turnId}` && m.role === "assistant",
   );
+  if (index < 0) return null;
+  return { msg: messages[index] as AssistantChatMessage, index };
+}
+
+// Map RTAI ToolCallStatus to the official ToolCallMessagePartStatus.
+// All reason literals come from @assistant-ui/react@0.15.17.
+function mapToolStatus(status: string | undefined): ToolPartStatus {
+  if (status === "success") return { type: "complete" };
+  if (status === "error") return { type: "incomplete", reason: "error" };
+  if (status === "cancelled")
+    return { type: "incomplete", reason: "cancelled" };
+  if (status === "aborted") return { type: "incomplete", reason: "other" };
+  if (status === "timeout") return { type: "incomplete", reason: "other" };
+  // "running", "pending", undefined, or unknown → running
+  return { type: "running" };
 }
 
 export const useChatStore = create<ChatState>()(
@@ -221,7 +256,9 @@ export const useChatStore = create<ChatState>()(
               if (state.activeTurnId !== null || state.promptRequestId !== null) {
                 set(clearTurnState);
               }
-              set({ reasoningParts: new Map() });
+              // Clear all part correlations — no partial streaming state
+              // survives a disconnect.
+              set({ partCorrelations: new Map() });
             }
             break;
           }
@@ -344,69 +381,70 @@ export const useChatStore = create<ChatState>()(
 
           case "user_message": {
             if (event.session_id !== state.sessionId) break;
-            const newMessage: ChatMessage = {
-              id: event.message_id,
+            // Skip if already exists (optimistic creation in onNew).
+            const exists = state.messages.some(
+              (m) => m.id === event.message_id,
+            );
+            if (exists) break;
+            const userMsg: ChatMessage = {
               role: "user",
-              text: event.text,
-              tools: [],
-              timestamp: Date.now(),
+              id: event.message_id,
+              content: [{ type: "text", text: event.text }],
+              createdAt: new Date(),
             };
             set({
-              messages: [...state.messages, newMessage],
+              messages: [...state.messages, userMsg],
               activeTurnId: event.turn_id,
               activeMessageId: event.message_id,
             });
             break;
           }
 
-          case "delta": {
-            if (
-              event.session_id !== state.sessionId ||
-              event.turn_id !== state.activeTurnId
-            ) {
-              break;
-            }
-            // delta carries no message_id (per protocol v1), so the streaming
-            // target is tracked by activeMessageId: the first delta creates
-            // the assistant message, later ones append to it.
-            const idx = findActiveAssistantIndex(
-              state.messages,
-              state.activeMessageId,
-            );
-            if (idx >= 0) {
-              set({
-                messages: state.messages.map((m, i) =>
-                  i === idx ? { ...m, text: m.text + event.text } : m,
-                ),
-              });
-            } else {
-              const newMessage: ChatMessage = {
-                id: `msg-${Date.now()}`,
-                role: "assistant",
-                text: event.text,
-                tools: [],
-                timestamp: Date.now(),
-              };
-              set({
-                messages: [...state.messages, newMessage],
-                activeMessageId: newMessage.id,
-              });
-            }
-            break;
-          }
-
-          case "done":
+          case "done": {
             // Match the stable current turn (pending/active) by turn_id, not
             // only activeTurnId: cancellation must clear state before a
             // user_message establishes activeTurnId. A late terminal event
             // from an older turn is ignored.
             if (
-              event.session_id === state.sessionId &&
-              event.turn_id === state.turnId
+              event.session_id !== state.sessionId ||
+              event.turn_id !== state.turnId
             ) {
-              set({ ...clearTurnState });
+              break;
             }
+
+            // Determine official terminal MessageStatus.
+            let terminalStatus: MessageStatus;
+            if (event.reason === "cancelled") {
+              terminalStatus = { type: "incomplete", reason: "cancelled" };
+            } else if (event.reason === "error") {
+              terminalStatus = { type: "incomplete", reason: "error" };
+            } else {
+              terminalStatus = { type: "complete", reason: "stop" };
+            }
+
+            // Mark assistant message status immutably.
+            const found = findByTurnId(state.messages, event.turn_id);
+            let nextMessages = state.messages;
+            if (found) {
+              nextMessages = state.messages.map((m, i) =>
+                i === found.index ? { ...m, status: terminalStatus } : m,
+              );
+            }
+
+            // Clear correlations for this turn.
+            const nextCorr = new Map(state.partCorrelations);
+            const turnPrefix = `${event.turn_id}:`;
+            for (const key of nextCorr.keys()) {
+              if (key.startsWith(turnPrefix)) nextCorr.delete(key);
+            }
+
+            set({
+              messages: nextMessages,
+              partCorrelations: nextCorr,
+              ...clearTurnState,
+            });
             break;
+          }
 
           case "tool_start": {
             if (
@@ -415,35 +453,45 @@ export const useChatStore = create<ChatState>()(
             ) {
               break;
             }
-            const toolCall: ToolCall = {
-              id: event.tool_call_id,
-              title: event.title,
-              kind: event.kind,
-              status: "running",
+            const toolPart: ToolPart = {
+              type: "tool-call",
+              toolCallId: event.tool_call_id,
+              toolName: event.title ?? event.kind ?? "tool",
+              args: (event.raw_input ?? {}) as ToolPart["args"],
+              argsText: event.raw_input
+                ? JSON.stringify(event.raw_input)
+                : "",
+              status: { type: "running" },
+              result:
+                event.content
+                  ?.map((c) =>
+                    c.type === "content" ? c.text ?? "" : "",
+                  )
+                  .filter(Boolean)[0] ?? undefined,
               locations: event.locations,
-              rawInput: event.raw_input,
             };
-            const idx = findActiveAssistantIndex(
-              state.messages,
-              state.activeMessageId,
-            );
-            if (idx >= 0) {
+            const found = findByTurnId(state.messages, event.turn_id);
+            if (found) {
+              const updatedMsg: AssistantChatMessage = {
+                ...found.msg,
+                content: [...found.msg.content, toolPart],
+              };
               set({
                 messages: state.messages.map((m, i) =>
-                  i === idx ? { ...m, tools: [...m.tools, toolCall] } : m,
+                  i === found.index ? updatedMsg : m,
                 ),
               });
             } else {
-              const newMessage: ChatMessage = {
-                id: `msg-${Date.now()}`,
+              const asstMsg: ChatMessage = {
                 role: "assistant",
-                text: "",
-                tools: [toolCall],
-                timestamp: Date.now(),
+                id: `asst-${event.turn_id}`,
+                content: [toolPart],
+                status: { type: "running" },
+                createdAt: new Date(),
               };
               set({
-                messages: [...state.messages, newMessage],
-                activeMessageId: newMessage.id,
+                messages: [...state.messages, asstMsg],
+                activeMessageId: asstMsg.id,
               });
             }
             break;
@@ -456,20 +504,46 @@ export const useChatStore = create<ChatState>()(
             ) {
               break;
             }
+            const found = findByTurnId(state.messages, event.turn_id);
+            if (!found) break;
+            const msg = found.msg;
+            let toolIdx = -1;
+            for (let i = msg.content.length - 1; i >= 0; i--) {
+              const p = msg.content[i];
+              if (
+                p.type === "tool-call" &&
+                p.toolCallId === event.tool_call_id
+              ) {
+                toolIdx = i;
+                break;
+              }
+            }
+            if (toolIdx < 0) break;
+            const existingPart = msg.content[toolIdx] as ToolPart;
+            let newStatus: ToolPartStatus;
+            if (event.status) {
+              newStatus = mapToolStatus(event.status);
+            } else {
+              newStatus = existingPart.status ?? { type: "running" };
+            }
+            const updatedPart: ToolPart = {
+              ...existingPart,
+              status: newStatus,
+              result:
+                event.content
+                  ?.map((c) =>
+                    c.type === "content" ? c.text ?? "" : "",
+                  )
+                  .filter(Boolean)[0] ?? existingPart.result,
+              locations: event.locations ?? existingPart.locations,
+            };
+            const content = [...msg.content];
+            content[toolIdx] = updatedPart;
+            const updatedMsg: AssistantChatMessage = { ...msg, content };
             set({
-              messages: state.messages.map((m) => ({
-                ...m,
-                tools: m.tools.map((t) =>
-                  t.id === event.tool_call_id
-                    ? {
-                        ...t,
-                        status: (event.status ?? t.status) as ToolCallStatus,
-                        content: event.content ?? t.content,
-                        locations: event.locations ?? t.locations,
-                      }
-                    : t,
-                ),
-              })),
+              messages: state.messages.map((m, i) =>
+                i === found.index ? updatedMsg : m,
+              ),
             });
             break;
           }
@@ -481,20 +555,40 @@ export const useChatStore = create<ChatState>()(
             ) {
               break;
             }
+            const found = findByTurnId(state.messages, event.turn_id);
+            if (!found) break;
+            const msg = found.msg;
+            let toolIdx = -1;
+            for (let i = msg.content.length - 1; i >= 0; i--) {
+              const p = msg.content[i];
+              if (
+                p.type === "tool-call" &&
+                p.toolCallId === event.tool_call_id
+              ) {
+                toolIdx = i;
+                break;
+              }
+            }
+            if (toolIdx < 0) break;
+            const existingPart = msg.content[toolIdx] as ToolPart;
+            const updatedPart: ToolPart = {
+              ...existingPart,
+              status: mapToolStatus(event.status),
+              result:
+                event.content
+                  ?.map((c) =>
+                    c.type === "content" ? c.text ?? "" : "",
+                  )
+                  .filter(Boolean)[0] ?? existingPart.result,
+              locations: event.locations ?? existingPart.locations,
+            };
+            const content = [...msg.content];
+            content[toolIdx] = updatedPart;
+            const updatedMsg: AssistantChatMessage = { ...msg, content };
             set({
-              messages: state.messages.map((m) => ({
-                ...m,
-                tools: m.tools.map((t) =>
-                  t.id === event.tool_call_id
-                    ? {
-                        ...t,
-                        status: event.status as ToolStatus,
-                        content: event.content ?? t.content,
-                        locations: event.locations ?? t.locations,
-                      }
-                    : t,
-                ),
-              })),
+              messages: state.messages.map((m, i) =>
+                i === found.index ? updatedMsg : m,
+              ),
             });
             break;
           }
@@ -525,89 +619,184 @@ export const useChatStore = create<ChatState>()(
             break;
           }
 
-          case "cancelled":
-            // Legacy defensive handler: the backend now emits a single
+          case "cancelled": {
+            // Defensive handler: the backend now emits a single
             // `done {reason: "cancelled"}` instead of a separate `cancelled`
-            // event, but clear matching state if one still arrives.
+            // event, but mark assistant and clear matching state if one still
+            // arrives.
             if (
-              event.session_id === state.sessionId &&
-              event.turn_id === state.turnId
+              event.session_id !== state.sessionId ||
+              event.turn_id !== state.turnId
             ) {
-              set(clearTurnState);
+              break;
             }
+            const cancelledStatus: MessageStatus = {
+              type: "incomplete",
+              reason: "cancelled",
+            };
+            const found = findByTurnId(state.messages, event.turn_id);
+            let nextMessages = state.messages;
+            if (found) {
+              nextMessages = state.messages.map((m, i) =>
+                i === found.index ? { ...m, status: cancelledStatus } : m,
+              );
+            }
+            const nextCorr = new Map(state.partCorrelations);
+            const turnPrefix = `${event.turn_id}:`;
+            for (const key of nextCorr.keys()) {
+              if (key.startsWith(turnPrefix)) nextCorr.delete(key);
+            }
+            set({
+              messages: nextMessages,
+              partCorrelations: nextCorr,
+              ...clearTurnState,
+            });
             break;
+          }
 
-          case "part_start":
-            // Signal the start of a new reasoning/text part. The frontend
-            // allocates an empty accumulator so part_delta events can
-            // append into it before part_done resolves the part.
+          case "part_start": {
+            // Signal the start of a new reasoning/text part. Clone
+            // correlations, check for duplicate start (idempotent no-op),
+            // append exactly once, and record the exact content index.
             if (
-              event.session_id === state.sessionId &&
-              event.turn_id === state.activeTurnId
+              event.session_id !== state.sessionId ||
+              event.turn_id !== state.activeTurnId
             ) {
-              const next = new Map(state.reasoningParts);
-              const parts = next.get(event.message_id) ?? new Map();
-              parts.set(event.part_id, "");
-              next.set(event.message_id, parts);
-              set({ reasoningParts: next });
+              break;
             }
-            break;
+            const corrKey = `${event.turn_id}:${event.part_id}`;
+            const nextCorr = new Map(state.partCorrelations);
+            // Duplicate part_start with same key → idempotent no-op.
+            if (nextCorr.has(corrKey)) break;
 
-          case "part_delta":
-            // Append streamed text into the matching part accumulator.
-            if (
-              event.session_id === state.sessionId &&
-              event.turn_id === state.activeTurnId
-            ) {
-              const byMsg = state.reasoningParts.get(event.message_id);
-              if (!byMsg) break;
-              const existing = byMsg.get(event.part_id) ?? "";
-              const next = new Map(byMsg);
-              next.set(event.part_id, existing + event.text);
-              const outer = new Map(state.reasoningParts);
-              outer.set(event.message_id, next);
-              set({ reasoningParts: outer });
-            }
-            break;
+            // Create the official part from event.part_type.
+            const newPart: ThreadAssistantMessagePart =
+              event.part_type === "reasoning"
+                ? { type: "reasoning", text: "" }
+                : { type: "text", text: "" };
 
-          case "part_done":
-            // Part finished. If it was reasoning (empty group-id placeholder),
-            // drop the accumulator so convertMessage stops emitting it.
-            if (
-              event.session_id === state.sessionId &&
-              event.turn_id === state.activeTurnId
-            ) {
-              const byMsg = state.reasoningParts.get(event.message_id);
-              if (!byMsg) break;
-              const next = new Map(byMsg);
-              next.delete(event.part_id);
-              const outer = new Map(state.reasoningParts);
-              if (next.size === 0) {
-                outer.delete(event.message_id);
-              } else {
-                outer.set(event.message_id, next);
-              }
-              set({ reasoningParts: outer });
+            const found = findByTurnId(state.messages, event.turn_id);
+            let contentIndex: number;
+            let nextMessages: ChatMessage[];
+
+            if (found) {
+              contentIndex = found.msg.content.length;
+              const updatedMsg: AssistantChatMessage = {
+                ...found.msg,
+                content: [...found.msg.content, newPart],
+              };
+              nextMessages = state.messages.map((m, i) =>
+                i === found.index ? updatedMsg : m,
+              );
+            } else {
+              const asstMsg: ChatMessage = {
+                role: "assistant",
+                id: `asst-${event.turn_id}`,
+                content: [newPart],
+                status: { type: "running" },
+                createdAt: new Date(),
+              };
+              contentIndex = 0;
+              nextMessages = [...state.messages, asstMsg];
             }
+
+            nextCorr.set(corrKey, contentIndex);
+            set({
+              messages: nextMessages,
+              partCorrelations: nextCorr,
+              activeMessageId: `asst-${event.turn_id}`,
+            });
             break;
+          }
+
+          case "part_delta": {
+            // Append streamed text into the matching content part.
+            // Resolves by (event.turn_id, event.part_id) via correlation map.
+            if (
+              event.session_id !== state.sessionId ||
+              event.turn_id !== state.activeTurnId
+            ) {
+              break;
+            }
+            const corrKey = `${event.turn_id}:${event.part_id}`;
+            const contentIndex = state.partCorrelations.get(corrKey);
+            if (contentIndex === undefined) break;
+
+            const found = findByTurnId(state.messages, event.turn_id);
+            if (!found) break;
+
+            const part = found.msg.content[contentIndex];
+            // Narrow to text or reasoning before reading/updating .text.
+            if (part.type !== "text" && part.type !== "reasoning") break;
+
+            const newText = part.text + event.text;
+            const content = [...found.msg.content];
+            content[contentIndex] = { ...part, text: newText };
+            const updatedMsg: AssistantChatMessage = { ...found.msg, content };
+            set({
+              messages: state.messages.map((m, i) =>
+                i === found.index ? updatedMsg : m,
+              ),
+            });
+            break;
+          }
+
+          case "part_done": {
+            // Validate correlation and content part exist. Content and
+            // correlation are left unchanged — correlations persist until
+            // the turn reaches done/error/cancel/disconnect/reset.
+            if (
+              event.session_id !== state.sessionId ||
+              event.turn_id !== state.activeTurnId
+            ) {
+              break;
+            }
+            const corrKey = `${event.turn_id}:${event.part_id}`;
+            const contentIndex = state.partCorrelations.get(corrKey);
+            if (contentIndex === undefined) break;
+
+            // Validate content part exists at the stored index.
+            const found = findByTurnId(state.messages, event.turn_id);
+            if (!found) break;
+            const part = found.msg.content[contentIndex];
+            if (!part) break;
+
+            // No state mutation. Content retains accumulated text.
+            // Correlation entry is retained for late deltas.
+            break;
+          }
 
           case "warning":
             // Diagnostics only — surfaced by toast/error UI elsewhere.
             console.warn("[RTAI]", event.type, event.message);
             break;
 
-          case "error":
-            // A terminal error for the current turn clears its pending state
-            // and surfaces the message as `lastError` so the StatusBar can
-            // display it. Diagnostic errors without turn correlation are
-            // logged; errors that carry a known backend code but no turn
-            // (e.g. `history_degraded`) are surfaced so the user sees why.
+          case "error": {
             console.warn("[RTAI]", event.type, event.message);
+            // Turn-correlated error: finalize assistant, clear turn state.
             if (
               event.session_id === state.sessionId &&
               event.turn_id === state.turnId
             ) {
+              const errorStatus: MessageStatus = {
+                type: "incomplete",
+                reason: "error",
+              };
+              const found = findByTurnId(state.messages, event.turn_id);
+              let nextMessages = state.messages;
+              if (found) {
+                nextMessages = state.messages.map((m, i) =>
+                  i === found.index ? { ...m, status: errorStatus } : m,
+                );
+              }
+              const nextCorr = new Map(state.partCorrelations);
+              const turnPrefix = `${event.turn_id}:`;
+              for (const key of nextCorr.keys()) {
+                if (key.startsWith(turnPrefix)) nextCorr.delete(key);
+              }
               set({
+                messages: nextMessages,
+                partCorrelations: nextCorr,
                 activeTurnId: null,
                 activeMessageId: null,
                 promptRequestId: null,
@@ -622,6 +811,7 @@ export const useChatStore = create<ChatState>()(
               set({ lastError: { code: event.code, message: event.message } });
             }
             break;
+          }
         }
       },
 
@@ -706,7 +896,9 @@ export const useChatStore = create<ChatState>()(
 
       setAutoApprove: (on) => set({ autoApprove: on }),
 
-       resetSession: () =>
+      setMessages: (messages) => set({ messages: Array.from(messages) }),
+
+      resetSession: () =>
         set({
           sessionId: generateId(),
           turnId: "",
@@ -722,7 +914,7 @@ export const useChatStore = create<ChatState>()(
           lastError: null,
           pendingPermissions: new Map(),
           autoApprove: false,
-          reasoningParts: new Map(),
+          partCorrelations: new Map(),
         }),
     }),
     { name: "RTAI Chat Store" },

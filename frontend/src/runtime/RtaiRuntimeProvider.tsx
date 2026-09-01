@@ -3,14 +3,13 @@
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
-  type ThreadMessageLike,
   AuiConfig,
   Suggestions,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
 import { useRtaiSocket } from "../hooks/useRtaiSocket";
-import type { ClientCommand, ToolContentBlock } from "../types/protocol";
+import type { ClientCommand } from "../types/protocol";
 import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
 
 // Minimal runtime provider that wires WebSocket events → assistant-ui store.
@@ -31,7 +30,6 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const isRunning = useChatStore((s) => s.activeTurnId !== null);
   const sessionId = useChatStore((s) => s.sessionId);
   const turnId = useChatStore((s) => s.turnId);
-  const reasoningParts = useChatStore((s) => s.reasoningParts);
   const setConnected = useChatStore((s) => s.setConnected);
   const handleMessage = useChatStore((s) => s.handleMessage);
   const registerSend = useChatStore((s) => s.registerSend);
@@ -58,65 +56,26 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
     registerSend(socket.send);
   }, [registerSend, socket.send]);
 
-  // Convert our backend message format to assistant-ui ThreadMessageLike.
-  // The adapter calls this; we pass raw messages + this converter (not
-  // pre-converted messages), which is what ExternalStoreAdapter requires.
-  const convertMessage = useCallback(
-    (msg: ChatMessage): ThreadMessageLike => {
-      // Build reasoning parts for this message from the accumulated store.
-      // Each part_id maps to the full concatenated text emitted by
-      // part_start / part_delta / part_done. assistant-ui treats these as
-      // "reasoning" parts that GroupedParts will group with tool-call parts
-      // under the ChainOfThought accordion.
-      const byMsg = reasoningParts.get(msg.id);
-      const reasoningPartsForMsg: Array<{ type: "reasoning"; text: string }> =
-        byMsg ? Array.from(byMsg.values()).map((text) => ({ type: "reasoning" as const, text })) : [];
-
-      return {
-        role: msg.role,
-        id: msg.id,
-        createdAt: new Date(msg.timestamp),
-        content:
-          msg.role === "user"
-            ? [{ type: "text" as const, text: msg.text }]
-            : [
-                ...reasoningPartsForMsg,
-                { type: "text" as const, text: msg.text },
-                ...msg.tools.map((tool) => ({
-                  type: "tool-call" as const,
-                  toolName: tool.title ?? tool.kind ?? "tool",
-                  toolCallId: tool.id,
-                  args: tool.rawInput ?? {},
-                  status:
-                    tool.status === "running"
-                      ? { type: "running" as const }
-                      : tool.status === "error"
-                        ? { type: "incomplete" as const, reason: "error" as const }
-                        : { type: "complete" as const },
-                  result:
-                    tool.status === "success"
-                      ? tool.content?.map((c: ToolContentBlock) =>
-                          c.type === "content" ? c.text : "",
-                        )[0]
-                      : undefined,
-                })),
-              ],
-      };
-    },
-    // Include reasoningParts so convertMessage re-runs whenever reasoning
-    // parts are updated (part_delta fires frequently during streaming).
-    [reasoningParts],
-  );
-
-  // Create the runtime
+  // Create the runtime.
+  // T is inferred as ChatMessage from the messages selector.
+  // setMessages receives readonly ChatMessage[] per the ExternalStoreAdapter
+  // contract — no cast needed.
   const runtime = useExternalStoreRuntime({
     messages,
-    convertMessage,
+    setMessages: (msgs) => {
+      useChatStore.getState().setMessages(msgs);
+    },
     isRunning,
     onNew: async (message) => {
+      // Only user-authored messages are sent as prompts. This also narrows
+      // AppendMessage's role-discriminated content to ThreadUserMessagePart[].
+      if (message.role !== "user") return;
       const text =
         message.content[0]?.type === "text" ? message.content[0].text : "";
       if (!text.trim()) return;
+
+      // Capture snapshot BEFORE any mutation for rollback on send failure.
+      const currentMessages = useChatStore.getState().messages;
 
       // Identity contract: the conversation session_id is stable across every
       // turn in one chat. Each prompt gets its own distinct turn_id,
@@ -125,11 +84,26 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
       const newTurnId = generateId();
       const newMessageId = generateId();
       const newRequestId = generateId();
+      const asstMsgId = `asst-${newTurnId}`;
 
-      // Update store with the new turn's identities. The session id is NOT
-      // changed here — it stays stable for the whole conversation. In-flight
-      // selection requests from the previous turn are stale and cleared here
-      // (correlation rule: clear pending on new turn).
+      // Build optimistic messages. User content and attachments are preserved
+      // verbatim from the AppendMessage so the attachment pipeline is intact.
+      const userMsg: ChatMessage = {
+        role: "user",
+        id: newMessageId,
+        content: message.content,
+        attachments: message.attachments,
+        createdAt: new Date(),
+      };
+      const asstMsg: ChatMessage = {
+        role: "assistant",
+        id: asstMsgId,
+        content: [],
+        status: { type: "running" },
+        createdAt: new Date(),
+      };
+
+      // Optimistic state update: append both messages, set turn identities.
       useChatStore.setState({
         turnId: newTurnId,
         messageId: newMessageId,
@@ -139,6 +113,9 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
         cancelError: null,
         pendingSelections: new Map(),
         lastError: null,
+        messages: [...currentMessages, userMsg, asstMsg],
+        activeTurnId: newTurnId,
+        activeMessageId: asstMsgId,
       });
 
       // Send prompt via socket
@@ -153,19 +130,29 @@ export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
       };
 
       // Dispatch failure (socket unavailable/disconnected) must not leave the
-      // store stuck in a pending prompt: clear the turn state and surface an
-      // honest error instead of silently dropping the send.
+      // store stuck in a pending prompt: restore the exact snapshot and surface
+      // an honest error.
       const sent = socketRef.current?.send(command) ?? false;
       if (!sent) {
+        // Restore exact pre-mutation snapshot — removes both optimistic messages.
+        // Clear correlations for this turn (none should exist yet, but defensive).
+        const nextCorr = new Map(useChatStore.getState().partCorrelations);
+        const turnPrefix = `${newTurnId}:`;
+        for (const key of nextCorr.keys()) {
+          if (key.startsWith(turnPrefix)) nextCorr.delete(key);
+        }
+
         useChatStore.setState({
+          messages: currentMessages,
           turnId: "",
           messageId: "",
           promptRequestId: null,
+          activeTurnId: null,
+          activeMessageId: null,
           cancelRequestId: null,
           cancelPending: false,
           cancelError: null,
-          activeTurnId: null,
-          activeMessageId: null,
+          partCorrelations: nextCorr,
           lastError: {
             code: "send_failed",
             message: "Could not send prompt: connection unavailable",
