@@ -5,7 +5,6 @@ import type {
   ThreadAssistantMessagePart,
   ThreadUserMessagePart,
   MessageStatus,
-  ToolCallMessagePartStatus,
 } from "@assistant-ui/react";
 import type {
   ServerEvent,
@@ -39,10 +38,6 @@ type ToolPart = Extract<
   ThreadAssistantMessagePart,
   { type: "tool-call" }
 >;
-
-// Tool status derived from the pinned ToolCallMessagePartStatus.
-// All reason literals come from @assistant-ui/react@0.15.17.
-type ToolPartStatus = ToolCallMessagePartStatus;
 
 // A selection request awaiting authoritative confirmation from the backend.
 // Keyed in the store by the Protocol v1 `request_id` so multiple, distinct
@@ -208,19 +203,6 @@ function findByTurnId(
   );
   if (index < 0) return null;
   return { msg: messages[index] as AssistantChatMessage, index };
-}
-
-// Map RTAI ToolCallStatus to the official ToolCallMessagePartStatus.
-// All reason literals come from @assistant-ui/react@0.15.17.
-function mapToolStatus(status: string | undefined): ToolPartStatus {
-  if (status === "success") return { type: "complete" };
-  if (status === "error") return { type: "incomplete", reason: "error" };
-  if (status === "cancelled")
-    return { type: "incomplete", reason: "cancelled" };
-  if (status === "aborted") return { type: "incomplete", reason: "other" };
-  if (status === "timeout") return { type: "incomplete", reason: "other" };
-  // "running", "pending", undefined, or unknown → running
-  return { type: "running" };
 }
 
 export const useChatStore = create<ChatState>()(
@@ -461,14 +443,6 @@ export const useChatStore = create<ChatState>()(
               argsText: event.raw_input
                 ? JSON.stringify(event.raw_input)
                 : "",
-              status: { type: "running" },
-              result:
-                event.content
-                  ?.map((c) =>
-                    c.type === "content" ? c.text ?? "" : "",
-                  )
-                  .filter(Boolean)[0] ?? undefined,
-              locations: event.locations,
             };
             const found = findByTurnId(state.messages, event.turn_id);
             if (found) {
@@ -510,6 +484,7 @@ export const useChatStore = create<ChatState>()(
             let toolIdx = -1;
             for (let i = msg.content.length - 1; i >= 0; i--) {
               const p = msg.content[i];
+              if (!p) continue;
               if (
                 p.type === "tool-call" &&
                 p.toolCallId === event.tool_call_id
@@ -519,32 +494,14 @@ export const useChatStore = create<ChatState>()(
               }
             }
             if (toolIdx < 0) break;
-            const existingPart = msg.content[toolIdx] as ToolPart;
-            let newStatus: ToolPartStatus;
-            if (event.status) {
-              newStatus = mapToolStatus(event.status);
-            } else {
-              newStatus = existingPart.status ?? { type: "running" };
-            }
-            const updatedPart: ToolPart = {
-              ...existingPart,
-              status: newStatus,
-              result:
-                event.content
-                  ?.map((c) =>
-                    c.type === "content" ? c.text ?? "" : "",
-                  )
-                  .filter(Boolean)[0] ?? existingPart.result,
-              locations: event.locations ?? existingPart.locations,
-            };
-            const content = [...msg.content];
-            content[toolIdx] = updatedPart;
-            const updatedMsg: AssistantChatMessage = { ...msg, content };
-            set({
-              messages: state.messages.map((m, i) =>
-                i === found.index ? updatedMsg : m,
-              ),
-            });
+            // tool_update is by definition non-terminal (ACP: in_progress/pending,
+            // server: pending/running) and is emitted separately from tool_result
+            // (TERMINAL_STATUSES = success/error). Assistant UI derives a tool
+            // part as complete when `result !== undefined`, so setting `result`
+            // on a running update would prematurely complete the tool UI. No
+            // custom progress field exists on the official ToolCallMessagePart
+            // shape (core 0.3.16), so running updates intentionally do not mutate
+            // the part.
             break;
           }
 
@@ -561,6 +518,7 @@ export const useChatStore = create<ChatState>()(
             let toolIdx = -1;
             for (let i = msg.content.length - 1; i >= 0; i--) {
               const p = msg.content[i];
+              if (!p) continue;
               if (
                 p.type === "tool-call" &&
                 p.toolCallId === event.tool_call_id
@@ -571,16 +529,28 @@ export const useChatStore = create<ChatState>()(
             }
             if (toolIdx < 0) break;
             const existingPart = msg.content[toolIdx] as ToolPart;
+            const contentText = event.content
+              ?.map((c) => (c.type === "content" ? c.text ?? "" : ""))
+              .filter(Boolean)[0];
+            const existingText =
+              typeof existingPart.result === "string" && existingPart.result
+                ? existingPart.result
+                : undefined;
+            const definedResult =
+              contentText ??
+              existingText ??
+              (event.status === "success"
+                ? "<no result>"
+                : `Tool ${event.status}`);
             const updatedPart: ToolPart = {
               ...existingPart,
-              status: mapToolStatus(event.status),
-              result:
-                event.content
-                  ?.map((c) =>
-                    c.type === "content" ? c.text ?? "" : "",
-                  )
-                  .filter(Boolean)[0] ?? existingPart.result,
-              locations: event.locations ?? existingPart.locations,
+              result: definedResult,
+              isError:
+                event.status === "error" ||
+                event.status === "cancelled" ||
+                event.status === "aborted" ||
+                event.status === "timeout" ||
+                undefined,
             };
             const content = [...msg.content];
             content[toolIdx] = updatedPart;
@@ -726,6 +696,7 @@ export const useChatStore = create<ChatState>()(
             if (!found) break;
 
             const part = found.msg.content[contentIndex];
+            if (!part) break;
             // Narrow to text or reasoning before reading/updating .text.
             if (part.type !== "text" && part.type !== "reasoning") break;
 
