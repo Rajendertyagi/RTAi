@@ -2,10 +2,12 @@
 
 import { useEffect, useCallback, useRef, useState, type ReactNode } from "react";
 import { Bot, Brain, Cpu, Layers } from "lucide-react";
+import { useAssistantTransportSendCommand } from "@assistant-ui/react";
 import {
-  useAssistantTransportSendCommand,
-  useAssistantTransportState,
-  } from "@assistant-ui/react";
+  useRtaiCapabilities,
+  useRtaiCapabilitiesPending,
+  useRtaiSessionId,
+} from "@/hooks/useRtaiAssistantState";
 import type {
   RtaiCapabilityItem,
   RtaiCapabilitiesState,
@@ -185,9 +187,9 @@ function CapabilityEmpty({
 }
 
 export function CapabilityControls() {
-  const caps = useAssistantTransportState((s) => s.rtaiCapabilities);
-  const pending = useAssistantTransportState((s) => s.rtaiCapabilitiesPending);
-  const sessionId = useAssistantTransportState((s) => s.sessionId);
+  const caps = useRtaiCapabilities();
+  const pending = useRtaiCapabilitiesPending();
+  const sessionId = useRtaiSessionId();
   const sendCommand = useAssistantTransportSendCommand();
 
   const isInitialized = caps?.initialized ?? false;
@@ -384,16 +386,27 @@ export function CapabilityControls() {
     }
     if (caps?.models) {
       return (
-        <CapabilitySelect
-          key="model"
-          icon={<Cpu className="h-3.5 w-3.5" />}
-          label="Model"
-          value={caps.selected.model}
-          options={caps.models}
-          onChange={(v) => handleSelect("model", v)}
-          pending={pendingForKind("model")}
-          testId="composer-model"
-        />
+        <span key="model" className="inline-flex items-center gap-1.5">
+          <CapabilitySelect
+            key="model"
+            icon={<Cpu className="h-3.5 w-3.5" />}
+            label="Model"
+            value={caps.selected.model}
+            options={caps.models}
+            onChange={(v) => handleSelect("model", v)}
+            pending={pendingForKind("model")}
+            testId="composer-model"
+          />
+          {caps.error?.reason_code === "model" && (
+            <span
+              data-testid="composer-model-error"
+              className="text-xs text-destructive"
+              title={caps.error.reason_message}
+            >
+              {caps.error.reason_message}
+            </span>
+          )}
+        </span>
       );
     }
     return null;

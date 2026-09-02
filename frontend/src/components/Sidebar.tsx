@@ -2,7 +2,8 @@
 
 import { useRef, useState, useEffect } from "react";
 import { Moon, Sun, RefreshCw, Plus } from "lucide-react";
-import { useAui, useAuiState, useAssistantTransportState } from "@assistant-ui/react";
+import { useAui, useAuiState } from "@assistant-ui/react";
+import { useRtaiSessionId } from "@/hooks/useRtaiAssistantState";
 import { useSessionLifecycle } from "../runtime/RtaiRuntimeProvider";
 
 const THEME_KEY = "theme";
@@ -18,7 +19,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const [folder, setFolder] = useState("");
   const [newChatError, setNewChatError] = useState<string | null>(null);
 
-  const sessionId = useAssistantTransportState((s) => s.sessionId);
+  const sessionId = useRtaiSessionId();
   const aui = useAui();
   const threadRunning = useAuiState((s) => s.thread.isRunning ?? false);
   const { resetSession } = useSessionLifecycle();

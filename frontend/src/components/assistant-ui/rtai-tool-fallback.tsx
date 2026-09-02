@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  useAssistantTransportState,
   useAui,
   useAuiState,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
+import { useRtaiSessionId } from "@/hooks/useRtaiAssistantState";
 import {
   ToolFallback,
   ToolFallbackRoot,
@@ -50,7 +50,7 @@ type BridgeError = { kind: "alert" | "info"; message: string };
 export function RtaiToolFallback(props: ToolCallMessagePartProps) {
   // sessionId is projected into the AssistantTransport external state by the
   // RtaiRuntimeProvider converter (state.sessionId).
-  const sessionId = useAssistantTransportState((s) => s.sessionId);
+  const sessionId = useRtaiSessionId();
   const aui = useAui();
   const isRunning = useAuiState((s) => s.thread.isRunning);
 

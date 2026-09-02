@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useAssistantTransportState } from "@assistant-ui/react";
+import { X } from "lucide-react";
+import { useRtaiDiagnostics } from "@/hooks/useRtaiAssistantState";
 import type { RtaiDiagnosticEvent } from "@/types/rtaiAssistantState";
 
 const LEVELS = ["all", "debug", "info", "warn", "error"] as const;
@@ -14,10 +15,16 @@ const LEVEL_STYLES: Record<string, string> = {
 };
 
 /**
- * Minimal, RTAI-specific safe-event log. It is the only diagnostics UI and is
- * closed by default. It never sends anything to the backend and only displays
- * the safe, ring-buffered events the backend projects through the existing
- * AssistantTransport external state (no second store, polling, or console dump).
+ * RTAI-safe diagnostics page.
+ *
+ * It is a dedicated, full-surface panel reachable from the app shell. It stays
+ * closed/not mounted until opened (returns null when `open` is false) and never
+ * interferes with chat. It only displays the safe, ring-buffered events the
+ * backend projects through the existing AssistantTransport external state — there
+ * is no second store, no polling, and no separate diagnostics REST endpoint.
+ *
+ * Events are shown newest-first so the most recent lifecycle events are always
+ * immediately visible without scrolling.
  */
 export function DiagnosticsPanel({
   open,
@@ -26,13 +33,13 @@ export function DiagnosticsPanel({
   open: boolean;
   onClose: () => void;
 }) {
-  const events = useAssistantTransportState((s) => s.rtaiDiagnostics) ?? [];
+  const events = useRtaiDiagnostics();
   const [level, setLevel] = useState<string>("all");
   const [corr, setCorr] = useState("");
 
   const filtered = useMemo(() => {
     const list = events as RtaiDiagnosticEvent[];
-    return list.filter((e) => {
+    const matched = list.filter((e) => {
       if (level !== "all" && e.level !== level) return false;
       if (corr.trim()) {
         const hay = JSON.stringify(e).toLowerCase();
@@ -40,23 +47,32 @@ export function DiagnosticsPanel({
       }
       return true;
     });
+    // Newest first.
+    return [...matched].reverse();
   }, [events, level, corr]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed bottom-12 right-3 z-50 w-[min(92vw,28rem)] rounded-lg border border-border bg-popover text-popover-foreground shadow-xl">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <span className="text-sm font-medium">Diagnostics</span>
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+      <header className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold">Diagnostics</h2>
+          <span className="text-xs text-muted-foreground">
+            {filtered.length} event{filtered.length === 1 ? "" : "s"}
+          </span>
+        </div>
         <button
           type="button"
-          className="text-xs text-muted-foreground hover:text-foreground"
           onClick={onClose}
+          aria-label="Close diagnostics"
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          Close
+          <X className="size-4" />
         </button>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
+      </header>
+
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-xs">
         <div className="flex gap-1">
           {LEVELS.map((lv) => (
             <button
@@ -77,34 +93,40 @@ export function DiagnosticsPanel({
         <input
           value={corr}
           onChange={(e) => setCorr(e.target.value)}
-          placeholder="filter id / text"
-          className="ml-auto w-36 rounded border border-border bg-background px-2 py-1 text-xs"
+          placeholder="filter by correlation id / text"
+          className="ml-auto w-56 rounded border border-border bg-background px-2 py-1 text-xs"
         />
       </div>
-      <p className="px-3 pb-1 text-[11px] text-muted-foreground">
-        Sensitive conversation and tool content is intentionally excluded.
+
+      <p className="px-4 py-2 text-[11px] text-muted-foreground">
+        Sensitive conversation content, file paths, tool args/results, credentials,
+        and secrets are intentionally excluded. Events contain only timestamps,
+        stable event names, levels, short correlation ids, and safe scalar counts.
       </p>
-      <div className="max-h-[50vh] overflow-auto px-3 pb-3 font-mono text-[11px]">
+
+      <div className="flex-1 overflow-auto px-4 pb-6 font-mono text-[11px]">
         {filtered.length === 0 ? (
           <p className="text-muted-foreground">No diagnostic events.</p>
         ) : (
-          filtered.map((e, i) => (
-            <div key={i} className="border-b border-border/50 py-1">
-              <div className="flex gap-2">
-                <span className="text-muted-foreground">{e.ts}</span>
-                <span className={LEVEL_STYLES[e.level] ?? "text-foreground"}>
-                  {e.level}
-                </span>
-                <span className="font-semibold">{e.event}</span>
-              </div>
-              <div className="text-muted-foreground">
-                {Object.entries(e)
-                  .filter(([k]) => k !== "ts" && k !== "level" && k !== "event")
-                  .map(([k, v]) => `${k}=${String(v)}`)
-                  .join("  ")}
-              </div>
-            </div>
-          ))
+          <ul className="flex flex-col gap-1">
+            {filtered.map((e, i) => (
+              <li key={i} className="border-b border-border/50 py-1">
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground">{e.ts}</span>
+                  <span className={LEVEL_STYLES[e.level] ?? "text-foreground"}>
+                    {e.level}
+                  </span>
+                  <span className="font-semibold">{e.event}</span>
+                </div>
+                <div className="text-muted-foreground">
+                  {Object.entries(e)
+                    .filter(([k]) => k !== "ts" && k !== "level" && k !== "event")
+                    .map(([k, v]) => `${k}=${String(v)}`)
+                    .join("  ")}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </div>

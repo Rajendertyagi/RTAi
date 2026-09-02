@@ -5,8 +5,8 @@ import {
   ComposerPrimitive,
   useAui,
   useAuiState,
-  useAssistantTransportState,
-  } from "@assistant-ui/react";
+} from "@assistant-ui/react";
+import { useRtaiAssistantState } from "@/hooks/useRtaiAssistantState";
 import { ArrowUp, Paperclip, Square, X } from "lucide-react";
 import { CapabilityControls } from "./CapabilitySelectors";
 
@@ -15,7 +15,7 @@ export function Composer() {
   const aui = useAui();
   // Official transport running state: connection isSending (via thread) or backend status === "running"
   // Send/Stop depend only on official runtime; permissions not migrated this phase.
-  const transportStatusRunning = useAssistantTransportState((s) => s.status === "running");
+  const transportStatusRunning = useRtaiAssistantState((s) => s.status === "running", false);
   const threadRunning = useAuiState((s) => s.thread?.isRunning ?? false);
   const isRunning = transportStatusRunning || threadRunning;
   const handleCancel = () => aui.thread().cancelRun();

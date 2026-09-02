@@ -228,7 +228,6 @@ class AcpSession(AgentAdapter):
         # single authorized set_config_option path (the same path select() uses).
         self._record_diag(EVENT["PROMPT_STARTED"], "info", session=short_id(self._session_id), text_length=len(text))
         try:
-            await self._reassert_selected_model()
             await self._connection.prompt(
                 session_id=self._session_id,
                 prompt=[text_block(text)],
@@ -245,51 +244,6 @@ class AcpSession(AgentAdapter):
         except Exception:
             self._record_diag(EVENT["PROMPT_FAILED"], "error", session=short_id(self._session_id))
             raise
-
-    async def _reassert_selected_model(self) -> None:
-        """Re-apply the selected model to the live session before a prompt.
-
-        The ACP prompt request exposes no model field, so a turn's effective
-        model is whatever the session config currently holds. We re-assert the
-        single authorized config option (the same one ``select()`` uses) so the
-        next prompt demonstrably runs with the user's selection. There is no
-        second selection UI and no hardcoded model - only the runtime-provided
-        config id and the already-validated selected value.
-        """
-        if not self._connection or not self._session_id:
-            return
-        caps = self._capabilities
-        if not caps.selected_model or not caps.model_config_id:
-            return
-        self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", config_id=caps.model_config_id)
-        try:
-            result = await self._connection.set_config_option(
-                session_id=self._session_id,
-                config_id=caps.model_config_id,
-                value=caps.selected_model,
-            )
-            dumped = jsonable_model(result)
-            if isinstance(dumped, dict):
-                options = dumped.get("configOptions")
-                if isinstance(options, list):
-                    caps.ingest_config_options(options)
-            log_event(
-                logger,
-                logging.DEBUG,
-                "acp_model_reasserted",
-                session=short_id(self._session_id),
-                model=caps.selected_model,
-            )
-            self._record_diag(EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", config_id=caps.model_config_id)
-        except Exception as exc:
-            self._record_diag(EVENT["ACP_CONFIG_OPTION_FAILED"], "error", config_id=caps.model_config_id)
-            log_event(
-                logger,
-                logging.WARNING,
-                "acp_model_reassert_failed",
-                session=short_id(self._session_id),
-                error=str(exc),
-            )
 
     async def submit_prompt_content(self, content: list[PromptContent]) -> None:
         """Send a multi-block prompt with validated attachments.
@@ -398,9 +352,6 @@ class AcpSession(AgentAdapter):
             kinds=[b.kind.value for b in content],
             total_bytes=sum(b.size_bytes for b in content),
         )
-        # Re-assert the user's selected model (same path as submit_prompt) so the
-        # next turn demonstrably uses the selection. ACP prompts carry no model.
-        await self._reassert_selected_model()
         await self._connection.prompt(
             session_id=self._session_id,
             prompt=blocks,
