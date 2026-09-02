@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useCallback, useRef, useState, type ReactNode } from "react";
-import { Bot, Brain, Cpu, Layers } from "lucide-react";
+import { Bot, Cpu, Layers } from "lucide-react";
 import { useAssistantTransportSendCommand } from "@assistant-ui/react";
 import {
   useRtaiCapabilities,
@@ -12,6 +12,11 @@ import type {
   RtaiCapabilityItem,
   RtaiCapabilitiesState,
 } from "../types/rtaiAssistantState";
+import {
+  ModelSelectorRoot,
+  ModelSelectorTrigger,
+  ModelSelectorContent,
+} from "@/components/ModelSelector";
 
 // --- Capability bootstrap diagnostics (gated; enable via localStorage["rtai-debug"]="1") ---
 // Logs only stage names, booleans, short ids and counts (never capability values/payloads).
@@ -39,13 +44,14 @@ const RTAI_DIAG = (stage: string, meta?: Record<string, unknown>) => {
   console.debug("[rtai-capability]", stage, meta ?? "");
 };
 
-// PART C decision: the official Assistant UI Model Selector is intentionally NOT
-// adopted here. In the pinned @assistant-ui/react@0.15.17 it would require either a
-// model registry / `config.modelName` selection path or a connected selector that
-// owns model state — both conflict with the single authoritative RTAI selection
-// path (the rtai.selectModel / rtai.selectThinking commands). These minimal native
-// <select> controls keep exactly one selection path and submit exact backend
-// option IDs (never labels). Agent/mode use the same controlled pattern.
+// PART C: the official Assistant UI registry ModelSelectorRoot is adopted here as
+// a STANDALONE, controlled component (no .aui / api.modelContext.register, no
+// connected selector that owns model state). It is driven entirely by RTAI's
+// authoritative capability state and submits exact backend option IDs (never
+// labels) through the rtai.selectModel / rtai.selectThinking commands. The model
+// list is the model selection path; the selected model's effort radios are the
+// thinking selection path - exactly one selection path, no modelContext sync.
+// Agent/mode keep the minimal native <select> controlled pattern below.
 type CapabilityKind = "agent" | "model" | "mode" | "thinking";
 
 const COMMAND_BY_KIND: Record<
@@ -387,16 +393,30 @@ export function CapabilityControls() {
     if (caps?.models) {
       return (
         <span key="model" className="inline-flex items-center gap-1.5">
-          <CapabilitySelect
-            key="model"
-            icon={<Cpu className="h-3.5 w-3.5" />}
-            label="Model"
-            value={caps.selected.model}
-            options={caps.models}
-            onChange={(v) => handleSelect("model", v)}
-            pending={pendingForKind("model")}
-            testId="composer-model"
-          />
+          <ModelSelectorRoot
+            models={caps.models.map((m) => ({
+              id: m.id,
+              name: m.label,
+              efforts: caps.thinkingOptions
+                ? caps.thinkingOptions.map((t) => ({
+                    id: t.id,
+                    name: t.label,
+                  }))
+                : undefined,
+            }))}
+            value={caps.selected.model ?? undefined}
+            onValueChange={(id) => handleSelect("model", id)}
+            effort={caps.selected.thinking ?? undefined}
+            onEffortChange={(id) => handleSelect("thinking", id)}
+          >
+            <ModelSelectorTrigger
+              variant="ghost"
+              size="sm"
+              className="px-2 py-1"
+              disabled={pendingForKind("model")}
+            />
+            <ModelSelectorContent align="start" searchable={false} />
+          </ModelSelectorRoot>
           {caps.error?.reason_code === "model" && (
             <span
               data-testid="composer-model-error"
@@ -463,36 +483,6 @@ export function CapabilityControls() {
     return null;
   };
 
-  const renderThinking = (): ReactNode => {
-    if (!isInitialized) return null;
-    if (caps?.thinkingOptions === null) return null; // unsupported → hidden
-    if (!caps?.thinkingOptions || caps.thinkingOptions.length === 0) {
-      if (caps?.error) {
-        return (
-          <CapabilityUnavailable
-            key="thinking"
-            icon={<Bot className="h-3.5 w-3.5" />}
-            label="Thinking"
-            reason={caps.error}
-            testId="composer-thinking"
-          />
-        );
-      }
-      return null;
-    }
-    return (
-      <CapabilitySelect
-        key="thinking"
-        icon={<Bot className="h-3.5 w-3.5" />}
-        label="Thinking"
-        value={caps.selected.thinking}
-        options={caps.thinkingOptions}
-        onChange={(v) => handleSelect("thinking", v)}
-        pending={pendingForKind("thinking")}
-        testId="composer-thinking"
-      />
-    );
-  };
 
   if (!caps) {
     if (failed) {
@@ -530,7 +520,6 @@ export function CapabilityControls() {
       {renderAgent()}
       {renderModel()}
       {renderMode()}
-      {renderThinking()}
     </div>
   );
 }
