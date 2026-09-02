@@ -133,5 +133,8 @@ export type RtaiDiagnosticEvent = {
   ts: string;
   event: string;
   level: string;
-  [key: string]: unknown;
+  // Only JSON-safe scalar fields are ever present (see backend
+  // DiagnosticsRecorder); an open index keeps the varied safe fields while
+  // staying assignable to assistant-stream's ReadonlyJSONValue.
+  [key: string]: string | number | boolean | null;
 };
