@@ -35,12 +35,18 @@ jobs:
       - name: Fail if any unrelated frontend file changed
         shell: bash
         run: |
-          # Strip CR (Windows git status emits CRLF) so the filename filter is
-          # CRLF-safe; otherwise the end-of-line anchor never matches.
-          others=$(git status --porcelain frontend | tr -d '\r' | grep -v -E 'node_modules|package(-lock)?\.json' | wc -l)
+          # Strip CR (Windows git status emits CRLF) so the filename filter is CRLF-safe.
+          changed=$(git status --porcelain frontend | tr -d '\r')
+          echo "Changed frontend files:"
+          echo "$changed"
+          # Keep only lines that are NOT one of the two allowed manifest files and
+          # are not blank. When only the manifests changed this resolves to empty.
+          # `|| true` prevents the no-match `grep -v` exit code (1) from aborting
+          # the pipeline under `set -e -o pipefail` (GitHub default for bash).
+          others=$(printf '%s\n' "$changed" | grep -v -E '^$|package(-lock)?\.json$' | wc -l || true)
           if [ "$others" -ne 0 ]; then
             echo "::error::Unexpected changes outside package.json / package-lock.json:"
-            git status --porcelain frontend
+            printf '%s\n' "$changed" | grep -v -E '^$|package(-lock)?\.json$'
             exit 1
           fi
           echo "Only frontend/package.json and frontend/package-lock.json were modified."
