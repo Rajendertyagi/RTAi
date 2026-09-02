@@ -225,7 +225,11 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                             for i in range(n):  # type: ignore[arg-type]
                                 try:
                                     m = messages_proxy[i]  # type: ignore[index]
-                                    mid = m.get("id") if isinstance(m, dict) else None  # type: ignore[union-attr]
+                                    # controller.state["messages"][i] is a StateProxy
+                                    # element, not a plain dict, so isinstance(m, dict)
+                                    # is False and would force mid=None. Read id via .get,
+                                    # which works for both plain dicts and StateProxy views.
+                                    mid = m.get("id") if hasattr(m, "get") else None
                                     if isinstance(mid, str) and mid == parent_id:
                                         parent_idx = i
                                         break
@@ -241,7 +245,7 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                             truncated: list[Any] = []
                             for i in range(parent_idx + 1):  # type: ignore[arg-type]
                                 with contextlib.suppress(Exception):
-                                    truncated.append(messages_proxy[i])  # type: ignore[index]
+                                    truncated.append(initial_state["messages"][i])  # type: ignore[index]
                             controller.state["messages"] = truncated  # type: ignore[index]
                         except Exception:
                             _set_status(controller, "error", error="parent_truncate_failed")
