@@ -97,22 +97,36 @@ def map_tool_locations(locations: Any) -> list[dict[str, Any]] | None:
     return items or None
 
 
-def permission_option(option: Any, index: int) -> dict[str, str]:
-    """Map an ACP PermissionOption (pydantic model or dict) to a Protocol v1 item.
+def permission_option(option: Any) -> dict[str, str] | None:
+    """Map one ACP ``PermissionOption`` to a Protocol v1 item.
 
-    The ACP SDK hands ``request_permission`` a list of pydantic
-    ``PermissionOption`` models (``optionId``/``name``/``kind``), not dicts.
+    This function is the single ACP wire boundary for permission options. The
+    official ACP v1 shape is ``optionId``/``name``/``kind``; the pinned SDK
+    models it as pydantic field ``option_id`` with alias ``optionId`` and has
+    no ``id`` field at all. Both accepted inputs carry the official
+    identifier under its official name:
+
+    - a pydantic ``PermissionOption`` model -> typed attribute ``option_id``;
+    - an alias-serialized dict (``jsonable_model``/raw wire) -> ``optionId``.
+
+    No invented alias (``id``, ``label``, positional or label-derived ids) is
+    accepted. An option without an official identifier returns ``None`` and
+    the caller skips it; the identifier itself is preserved byte-for-byte.
     ``kind`` is included when present so the UI can auto-pick allow options.
     """
     if isinstance(option, dict):
-        option_id = option.get("optionId", option.get("id", index))
-        label = option.get("name", option.get("label", f"Option {index}"))
-        kind = option.get("kind", "")
+        option_id = option.get("optionId")
+        label = option.get("name")
+        kind = option.get("kind")
     else:
-        option_id = getattr(option, "optionId", index)
-        label = getattr(option, "name", f"Option {index}")
-        kind = getattr(option, "kind", "")
-    item: dict[str, str] = {"id": str(option_id), "label": str(label)}
+        option_id = getattr(option, "option_id", None)
+        label = getattr(option, "name", None)
+        kind = getattr(option, "kind", None)
+    if not isinstance(option_id, str) or not option_id:
+        return None
+    # Display label falls back to the exact identifier only for rendering;
+    # the identifier itself is never derived from the label.
+    item: dict[str, str] = {"id": option_id, "label": str(label) if label else option_id}
     if kind:
         item["kind"] = str(kind)
     return item

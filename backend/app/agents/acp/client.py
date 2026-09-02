@@ -56,8 +56,12 @@ def create_client_class() -> type:
                         "type": "permission_request",
                         "permission_request_id": perm_id,
                         "tool_call_id": tool_call_id_of(tool_call, f"tc-{perm_id}"),
+                        # Skip protocol-invalid options (no official optionId)
+                        # instead of inventing a positional or label-derived id.
                         "options": [
-                            permission_option(o, i) for i, o in enumerate(options)
+                            item
+                            for item in (permission_option(o) for o in options)
+                            if item is not None
                         ],
                         **permission_tool_details(tool_call),
                     }

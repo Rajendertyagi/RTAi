@@ -437,18 +437,18 @@ class AcpSession(AgentAdapter):
                 commands=self._pending_section(),
             )
         caps = self._capabilities
-        # Agents are exposed through ACP as session modes (OpenCode does this
-        # for build, plan and locally configured profiles), so the agents
-        # section mirrors the modes. The single agentInfo identity stays on
-        # snapshot.agent and is surfaced separately (agent_info / status bar).
+        # Agent identity and ACP session modes are different concepts. ACP
+        # exposes exactly one agent identity (agentInfo) on snapshot.agent and
+        # has no agent list or agent-switching method, so the agents section is
+        # honestly unavailable instead of mirroring the modes (which created
+        # fake agent choices and duplicated the Mode selector).
         agents = CapabilitySection(
-            items=tuple(
-                AgentDescriptor(id=m.id, label=m.label, description=m.description)
-                for m in caps.modes.items
-            )
+            items=(),
+            unavailable=UnavailableCapability(
+                UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER,
+                "ACP exposes one agent identity; agents are not selectable on this adapter.",
+            ),
         )
-        if caps.selected_mode is not None:
-            caps.selected_agent = caps.selected_mode
         # Attachment capabilities derived from ACP Initialize negotiation.
         # Resource links are baseline per ACP v1 spec; image/audio/embedded
         # are gated by agent promptCapabilities. RTAI safety limits are
@@ -481,8 +481,9 @@ class AcpSession(AgentAdapter):
             models=caps.models,
             modes=caps.modes,
             thinking_options=caps.thinking,
+            # No "agent" selection exists on ACP: the single agentInfo
+            # identity is projected from snapshot.agent, not from selected.
             selected={
-                "agent": caps.selected_agent,
                 "model": caps.selected_model,
                 "mode": caps.selected_mode,
                 "thinking": caps.selected_thinking,
@@ -692,21 +693,20 @@ class AcpSession(AgentAdapter):
         The authoritative echo (config_option_update / mode state) replaces
         local views; failures return a correlated non-applied result.
 
-        ``agent`` maps to ACP session modes: agents are exposed as modes, so
-        selecting an agent is a mode selection. Selecting the already-active
-        mode is a no-op.
+        ACP has no agent selection: ``kind == "agent"`` is answered with a
+        non-applied result instead of being redirected to the mode config.
         """
-        if kind == "agent":
-            current = self._capabilities.selected_mode
-            if current is not None and value_id == current:
-                return SelectionResult(
-                    kind=kind,
-                    applied=True,
-                    message="Agent selection is a no-op: the mode is already active.",
-                )
-            kind = "mode"
         if not self._connection or not self._session_id:
             return SelectionResult(kind=kind, applied=False, message="ACP session is not ready.")
+        if kind == "agent":
+            return SelectionResult(
+                kind=kind,
+                applied=False,
+                message=(
+                    "ACP exposes one agent identity; agent switching is not "
+                    "supported by this adapter."
+                ),
+            )
         caps = self._capabilities
         try:
             if kind == "mode" and caps.mode_config_id is None:

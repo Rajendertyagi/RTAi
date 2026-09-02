@@ -305,7 +305,11 @@ def _map_approval_option(option: dict[str, Any]) -> dict[str, Any] | None:
     Returns None for options whose kind is unknown/unsupported so they are never
     exposed as selectable approval options or counted as valid registry entries.
     """
-    oid = option.get("id") or option.get("optionId")
+    # Options arrive already normalized at the single ACP wire boundary
+    # (mapping.permission_option): the RTAI Protocol v1 identifier is ``id``,
+    # carrying the official ACP ``optionId`` value byte-for-byte. No legacy
+    # ``optionId``/``label`` aliases are accepted after that boundary.
+    oid = option.get("id")
     if not isinstance(oid, str) or not oid:
         return None
     kind = _map_approval_kind(option.get("kind"))

@@ -193,7 +193,21 @@ export function CapabilityControls() {
         />
       );
     }
-    if (caps?.agents === null) return null; // unsupported → hidden
+    if (caps?.agents === null) {
+      // No real agent list exists (ACP exposes one identity, no switching):
+      // show the active identity chip only when it is genuinely available.
+      // Never mirror ACP modes here — that duplicated the Mode selector.
+      if (!caps?.agent) return null;
+      return (
+        <CapabilityChip
+          key="agent"
+          icon={<Bot className="h-3.5 w-3.5" />}
+          label={caps.agent.label}
+          title={caps.agent.label}
+          testId="composer-agent"
+        />
+      );
+    }
     if (caps?.agents && caps.agents.length > 1) {
       return (
         <CapabilitySelect
@@ -227,18 +241,6 @@ export function CapabilityControls() {
           icon={<Bot className="h-3.5 w-3.5" />}
           label="Agent"
           message="No agents"
-          testId="composer-agent"
-        />
-      );
-    }
-    // Fallback single agent from `agent` field when `agents` is null but agent exists
-    if (caps?.agent) {
-      return (
-        <CapabilityChip
-          key="agent"
-          icon={<Bot className="h-3.5 w-3.5" />}
-          label={caps.agent.label}
-          title={caps.agent.label}
           testId="composer-agent"
         />
       );
