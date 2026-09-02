@@ -140,6 +140,22 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
         has_commands=bool(prepared_commands),
     )
 
+    # --- DIAGNOSTIC (gated by RTAI_LOG_LEVEL=DEBUG): command TYPE inventory ---
+    # Logs only command type strings (never message text/payloads/credentials).
+    if logger.isEnabledFor(logging.DEBUG):
+        _cmd_types = [
+            (c.get("type") if isinstance(c, dict) else str(type(c)))
+            for c in prepared_commands
+        ]
+        log_event(
+            logger,
+            logging.DEBUG,
+            "assistant_commands",
+            session=short_id(session_key),
+            count=len(prepared_commands),
+            types=",".join(_cmd_types) if _cmd_types else "none",
+        )
+
     factory = getattr(request.app.state, "adapter_factory", None)
     if factory is None:
         from ...agents.factory import create_default_factory
@@ -481,6 +497,14 @@ async def _apply_capability_command(
     the prior server-selected value and exposes a safe transport error that does
     not leak the submitted payload.
     """
+    ctype = cmd.get("type")
+    log_event(
+        logger,
+        logging.DEBUG,
+        "assistant_capability_command",
+        session=short_id(session_key),
+        type=str(cmd.get("type")),
+    )
     ctype = cmd.get("type")
     if ctype == RTAI_REFRESH_COMMAND:
         project_capabilities(controller, adapter.capability_snapshot())

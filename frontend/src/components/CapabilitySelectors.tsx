@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useCallback, useRef, useState, type ReactNode } from "react";
 import { Bot, Brain, Cpu, Layers } from "lucide-react";
 import {
   useAssistantTransportSendCommand,
@@ -10,6 +10,17 @@ import type {
   RtaiCapabilityItem,
   RtaiCapabilitiesState,
 } from "../types/rtaiAssistantState";
+
+// --- Capability bootstrap diagnostics (gated; enable via localStorage["rtai-debug"]="1") ---
+// Logs only stage names and booleans (never capability values/payloads).
+const RTAI_DIAG_ENABLED =
+  typeof window !== "undefined" &&
+  typeof window.localStorage !== "undefined" &&
+  window.localStorage.getItem("rtai-debug") === "1";
+const RTAI_DIAG = (stage: string, meta?: Record<string, unknown>) => {
+  if (!RTAI_DIAG_ENABLED) return;
+  console.debug("[rtai-capability]", stage, meta ?? "");
+};
 
 // PART C decision: the official Assistant UI Model Selector is intentionally NOT
 // adopted here. In the pinned @assistant-ui/react@0.15.17 it would require either a
@@ -163,9 +174,58 @@ export function CapabilityControls() {
   const pending = useAssistantTransportState((s) => s.rtaiCapabilitiesPending);
   const sendCommand = useAssistantTransportSendCommand();
 
-  // Bootstrap: if not initialized, show loading and trigger refresh once via pendingCommand
-  // The backend will project authoritative snapshot; no custom store.
   const isInitialized = caps?.initialized ?? false;
+  const refreshPending = pending?.refresh ?? false;
+
+  // Bootstrap lifecycle over the official AssistantTransport command queue only:
+  //   not-requested -> pending -> initialized | failed
+  // A single rtai.refreshCapabilities is queued on mount; the backend projects the
+  // authoritative snapshot into rtaiCapabilities. Without this the Composer is
+  // permanently stuck on "Loading capabilities…" (boundary A: the refresh command
+  // was never sent). No client session id is synthesized; the backend owns the id.
+  const requestedRef = useRef(false);
+  const sawPendingRef = useRef(false);
+  const [failed, setFailed] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  useEffect(() => {
+    RTAI_DIAG("bootstrap", { hasCaps: !!caps, initialized: caps?.initialized ?? null, refreshPending, failed });
+    if (caps) {
+      setFailed(false);
+      return;
+    }
+    if (refreshPending) {
+      sawPendingRef.current = true;
+      setFailed(false);
+      return;
+    }
+    if (requestedRef.current) {
+      // Queued a refresh, saw it go pending, and now it is neither pending nor
+      // resolved: the request failed or was dropped. Surface Retry instead of a
+      // permanent spinner. sawPendingRef avoids a StrictMode double-invoke false positive.
+      if (sawPendingRef.current) setFailed(true);
+      return;
+    }
+    // Not initialized, not pending, never requested: queue exactly one refresh.
+    requestedRef.current = true;
+    try {
+      RTAI_DIAG("refresh-queued");
+      sendCommand({ type: "rtai.refreshCapabilities" } as Parameters<typeof sendCommand>[0]);
+      setFailed(false);
+    } catch {
+      requestedRef.current = false; // allow a retry
+      setFailed(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caps, refreshPending, sendCommand, retryNonce]);
+
+  const handleRetry = useCallback(() => {
+    RTAI_DIAG("retry");
+    requestedRef.current = false;
+    sawPendingRef.current = false;
+    setFailed(false);
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   const pendingForKind = (kind: CapabilityKind): boolean => {
     if (!pending) return false;
@@ -382,7 +442,25 @@ export function CapabilityControls() {
   };
 
   if (!caps) {
-    // Bootstrap: show loading state, no fake defaults
+    if (failed) {
+      // Discovery failed/dropped: offer one Retry, never a permanent spinner.
+      RTAI_DIAG("render-failed");
+      return (
+        <div className="flex flex-wrap items-center gap-1" data-capabilities>
+          <span className="text-xs text-muted-foreground">Capabilities unavailable</span>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="rounded-lg px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground"
+            data-testid="composer-capabilities-retry"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    // Bootstrap: show loading state while the single refresh is in flight.
+    RTAI_DIAG("render-loading");
     return (
       <div className="flex flex-wrap items-center gap-1" data-capabilities>
         <span className="text-xs text-muted-foreground">Loading capabilities…</span>

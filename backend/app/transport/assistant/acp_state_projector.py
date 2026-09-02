@@ -418,6 +418,23 @@ def project_capabilities(controller: RunController, snapshot: Any) -> None:
         if controller.state is None:
             controller.state = {}
         controller.state["rtaiCapabilities"] = caps
+        # --- DIAGNOSTIC (gated by RTAI_LOG_LEVEL=DEBUG): projection summary ---
+        # Logs only booleans and section COUNTS (never option ids/values/labels).
+        if logger.isEnabledFor(logging.DEBUG):
+            _sel = caps.get("selected") or {}
+            log_event(
+                logger,
+                logging.DEBUG,
+                "assistant_capabilities_projected",
+                initialized=bool(caps.get("initialized")),
+                agent=bool(caps.get("agent")),
+                agents=len(caps.get("agents") or []),
+                models=len(caps.get("models") or []),
+                modes=len(caps.get("modes") or []),
+                thinking=len(caps.get("thinkingOptions") or []),
+                selected_kinds=",".join(_sel.keys()),
+            )
+        controller.state["rtaiCapabilities"] = caps
     except Exception:
         pass
 
