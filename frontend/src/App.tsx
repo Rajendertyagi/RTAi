@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { RtaiRuntimeProvider } from "./runtime/RtaiRuntimeProvider";
 import { Sidebar } from "./components/Sidebar";
-import { ChatPanel } from "./components/ChatPanel";
+import { ChatScreen } from "./components/ChatScreen";
 
 export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -29,7 +29,7 @@ export function App() {
     <RtaiRuntimeProvider>
       <div className="flex h-dvh min-h-0 w-full min-w-0 overflow-hidden">
         <Sidebar open={drawerOpen} onClose={closeDrawer} />
-        <ChatPanel
+        <ChatScreen
           drawerOpen={drawerOpen}
           onMenuClick={() => setDrawerOpen(true)}
           menuButtonRef={menuButtonRef}

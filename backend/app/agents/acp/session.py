@@ -45,6 +45,7 @@ from ..capabilities import (
 )
 from ..opencode.capability_mapper import AcpCapabilityState, command_item
 from ..owned_process import OwnedProcess
+from ..prompt_content import PromptContent, PromptKind, validate_prompt_limits
 from .client import create_client_class
 from .mapping import (
     TERMINAL_STATUSES,
@@ -52,7 +53,6 @@ from .mapping import (
     map_tool_locations,
     map_tool_status,
 )
-from .prompt_content import PromptContent, PromptKind, validate_prompt_limits
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +433,7 @@ class AcpSession(AgentAdapter):
                 models=self._pending_section(),
                 modes=self._pending_section(),
                 thinking_options=self._pending_section(),
+                selected={},
                 commands=self._pending_section(),
             )
         caps = self._capabilities
@@ -480,6 +481,12 @@ class AcpSession(AgentAdapter):
             models=caps.models,
             modes=caps.modes,
             thinking_options=caps.thinking,
+            selected={
+                "agent": caps.selected_agent,
+                "model": caps.selected_model,
+                "mode": caps.selected_mode,
+                "thinking": caps.selected_thinking,
+            },
             commands=caps.commands,
             attachments=ac,
             sessions=(

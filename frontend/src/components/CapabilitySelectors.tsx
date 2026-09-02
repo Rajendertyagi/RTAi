@@ -1,18 +1,27 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Bot, Brain, Cpu, Layers, ShieldCheck, ShieldOff } from "lucide-react";
-import { useChatStore, type PendingSelection } from "../state/chatStore";
-import type { CapabilityItem, UnavailableReason } from "../types/protocol";
+import { Bot, Brain, Cpu, Layers } from "lucide-react";
+import {
+  useAssistantTransportSendCommand,
+  useAssistantTransportState,
+} from "@assistant-ui/react";
+import type {
+  RtaiCapabilityItem,
+  RtaiCapabilitiesState,
+} from "../types/rtaiAssistantState";
 
-// Compact, theme-driven capability controls for the composer footer.
-// Every control is driven entirely by runtime state — never hardcoded —
-// and follows the tri-state contract:
-//   • available-with-items  → enabled dropdown (authoritative value shown)
-//   • available-but-empty   → disabled control + accessible explanation
-//   • unavailable           → disabled control showing the runtime reason
-// No control auto-selects a first item, and unavailable states are never
-// turned into fake empty lists or invented defaults.
+type CapabilityKind = "agent" | "model" | "mode" | "thinking";
+
+const COMMAND_BY_KIND: Record<
+  CapabilityKind,
+  "rtai.selectAgent" | "rtai.selectModel" | "rtai.selectMode" | "rtai.selectThinking"
+> = {
+  agent: "rtai.selectAgent",
+  model: "rtai.selectModel",
+  mode: "rtai.selectMode",
+  thinking: "rtai.selectThinking",
+};
 
 function CapabilitySelect({
   icon,
@@ -27,7 +36,7 @@ function CapabilitySelect({
   icon: ReactNode;
   label: string;
   value: string | null;
-  options: CapabilityItem[];
+  options: RtaiCapabilityItem[];
   onChange: (id: string) => void;
   disabled?: boolean;
   pending?: boolean;
@@ -67,8 +76,6 @@ function CapabilitySelect({
   );
 }
 
-// Noninteractive chip — used for a fixed identity (single agent, or the
-// backend-provided agent label when no selectable list exists).
 function CapabilityChip({
   icon,
   label,
@@ -94,7 +101,6 @@ function CapabilityChip({
   );
 }
 
-// Disabled control carrying a runtime reason (unavailable section).
 function CapabilityUnavailable({
   icon,
   label,
@@ -103,7 +109,7 @@ function CapabilityUnavailable({
 }: {
   icon: ReactNode;
   label: string;
-  reason: UnavailableReason;
+  reason: { reason_code: string; reason_message: string };
   testId?: string;
 }) {
   return (
@@ -120,7 +126,6 @@ function CapabilityUnavailable({
   );
 }
 
-// Available-but-empty: disabled control with a neutral explanation.
 function CapabilityEmpty({
   icon,
   label,
@@ -147,96 +152,117 @@ function CapabilityEmpty({
 }
 
 export function CapabilityControls() {
-  const agents = useChatStore((s) => s.agents);
-  const models = useChatStore((s) => s.models);
-  const modes = useChatStore((s) => s.modes);
-  const thinkingLevels = useChatStore((s) => s.thinkingLevels);
-  const selectedAgent = useChatStore((s) => s.selectedAgent);
-  const selectedModel = useChatStore((s) => s.selectedModel);
-  const selectedMode = useChatStore((s) => s.selectedMode);
-  const thinkingLevel = useChatStore((s) => s.thinkingLevel);
-  const agentsReason = useChatStore((s) => s.agentsReason);
-  const modelsReason = useChatStore((s) => s.modelsReason);
-  const modesReason = useChatStore((s) => s.modesReason);
-  const thinkingReason = useChatStore((s) => s.thinkingReason);
-  const pendingSelections = useChatStore((s) => s.pendingSelections);
-  const agentInfo = useChatStore((s) => s.agentInfo);
-  const selectAgent = useChatStore((s) => s.selectAgent);
-  const selectModel = useChatStore((s) => s.selectModel);
-  const selectMode = useChatStore((s) => s.selectMode);
-  const setThinkingLevel = useChatStore((s) => s.setThinkingLevel);
+  const caps = useAssistantTransportState((s) => s.rtaiCapabilities);
+  const pending = useAssistantTransportState((s) => s.rtaiCapabilitiesPending);
+  const sendCommand = useAssistantTransportSendCommand();
 
-  const isPending = (type: PendingSelection["type"]) =>
-    Array.from(pendingSelections.values()).some((p) => p.type === type);
+  // Bootstrap: if not initialized, show loading and trigger refresh once via pendingCommand
+  // The backend will project authoritative snapshot; no custom store.
+  const isInitialized = caps?.initialized ?? false;
 
-  // --- Agent -------------------------------------------------------------
-  // Multiple selectable agents → dropdown. One fixed identity → chip.
-  // No identity at all → omitted (no OpenCode/Agent fallback).
+  const pendingForKind = (kind: CapabilityKind): boolean => {
+    if (!pending) return false;
+    return pending[kind] ?? false;
+  };
+
+  const handleSelect = (kind: CapabilityKind, value: string) => {
+    // Send the exact adapter ID (never the label); validated strictly server-side.
+    // rtai.* commands are declared in assistantTransportAugmentation.ts
+    // (Assistant.Commands augmentation), so a single precise cast to the exact
+    // command parameter type is sufficient — no `as unknown as` / wide cast.
+    sendCommand({ type: COMMAND_BY_KIND[kind], value } as Parameters<typeof sendCommand>[0]);
+  };
+
+  // Agent: tri-state — available with items → dropdown, available empty → disabled, null → unsupported hidden
   const renderAgent = (): ReactNode => {
-    if (agents.length > 1) {
-      return (
-        <CapabilitySelect
-          key="agent"
-          icon={<Bot className="h-3.5 w-3.5" />}
-          label="Agent"
-          value={selectedAgent}
-          options={agents}
-          onChange={selectAgent}
-          pending={isPending("agent")}
-          testId="composer-agent"
-        />
-      );
-    }
-    if (agents.length === 1) {
-      const a = agents[0]!;
-      return (
-        <CapabilityChip
-          key="agent"
-          icon={<Bot className="h-3.5 w-3.5" />}
-          label={a.label}
-          title={a.description ?? a.label}
-          testId="composer-agent"
-        />
-      );
-    }
-    if (agentsReason) {
+    if (!isInitialized) {
       return (
         <CapabilityUnavailable
           key="agent"
           icon={<Bot className="h-3.5 w-3.5" />}
           label="Agent"
-          reason={agentsReason}
+          reason={{ reason_code: "not_initialized", reason_message: "Loading…" }}
           testId="composer-agent"
         />
       );
     }
-    if (agentInfo) {
+    if (caps?.agents === null) return null; // unsupported → hidden
+    if (caps?.agents && caps.agents.length > 1) {
+      return (
+        <CapabilitySelect
+          key="agent"
+          icon={<Bot className="h-3.5 w-3.5" />}
+          label="Agent"
+          value={caps.selected.agent}
+          options={caps.agents}
+          onChange={(v) => handleSelect("agent", v)}
+          pending={pendingForKind("agent")}
+          testId="composer-agent"
+        />
+      );
+    }
+    if (caps?.agents && caps.agents.length === 1) {
+      const a = caps.agents[0]!;
       return (
         <CapabilityChip
           key="agent"
           icon={<Bot className="h-3.5 w-3.5" />}
-          label={agentInfo}
-          title={agentInfo}
+          label={a.label}
+          title={a.label}
+          testId="composer-agent"
+        />
+      );
+    }
+    if (caps?.agents && caps.agents.length === 0) {
+      return (
+        <CapabilityEmpty
+          key="agent"
+          icon={<Bot className="h-3.5 w-3.5" />}
+          label="Agent"
+          message="No agents"
+          testId="composer-agent"
+        />
+      );
+    }
+    // Fallback single agent from `agent` field when `agents` is null but agent exists
+    if (caps?.agent) {
+      return (
+        <CapabilityChip
+          key="agent"
+          icon={<Bot className="h-3.5 w-3.5" />}
+          label={caps.agent.label}
+          title={caps.agent.label}
+          testId="composer-agent"
         />
       );
     }
     return null;
   };
 
-  // --- Model -------------------------------------------------------------
   const renderModel = (): ReactNode => {
-    if (modelsReason) {
+    if (!isInitialized) {
       return (
         <CapabilityUnavailable
           key="model"
           icon={<Cpu className="h-3.5 w-3.5" />}
           label="Model"
-          reason={modelsReason}
+          reason={{ reason_code: "not_initialized", reason_message: "Loading…" }}
           testId="composer-model"
         />
       );
     }
-    if (models.length === 0) {
+    if (caps?.models === null) {
+      return (
+        <CapabilityUnavailable
+          key="model"
+          icon={<Cpu className="h-3.5 w-3.5" />}
+          label="Model"
+          reason={caps.error ?? { reason_code: "not_exposed", reason_message: "Not available" }}
+          testId="composer-model"
+        />
+      );
+    }
+    if (caps?.models && caps.models.length === 0) {
       return (
         <CapabilityEmpty
           key="model"
@@ -247,36 +273,47 @@ export function CapabilityControls() {
         />
       );
     }
-    return (
-      <CapabilitySelect
-        key="model"
-        icon={<Cpu className="h-3.5 w-3.5" />}
-        label="Model"
-        value={selectedModel}
-        options={models}
-        onChange={selectModel}
-        pending={isPending("model")}
-        testId="composer-model"
-      />
-    );
+    if (caps?.models) {
+      return (
+        <CapabilitySelect
+          key="model"
+          icon={<Cpu className="h-3.5 w-3.5" />}
+          label="Model"
+          value={caps.selected.model}
+          options={caps.models}
+          onChange={(v) => handleSelect("model", v)}
+          pending={pendingForKind("model")}
+          testId="composer-model"
+        />
+      );
+    }
+    return null;
   };
 
-  // --- Mode --------------------------------------------------------------
-  // Runtime-dynamic: enabled dropdown when selectable, disabled-with-reason
-  // when the adapter reports it unavailable. NOT hardcoded to any adapter.
   const renderMode = (): ReactNode => {
-    if (modesReason) {
+    if (!isInitialized) {
       return (
         <CapabilityUnavailable
           key="mode"
           icon={<Layers className="h-3.5 w-3.5" />}
           label="Mode"
-          reason={modesReason}
+          reason={{ reason_code: "not_initialized", reason_message: "Loading…" }}
           testId="composer-mode"
         />
       );
     }
-    if (modes.length === 0) {
+    if (caps?.modes === null) {
+      return (
+        <CapabilityUnavailable
+          key="mode"
+          icon={<Layers className="h-3.5 w-3.5" />}
+          label="Mode"
+          reason={caps.error ?? { reason_code: "not_exposed", reason_message: "Not available" }}
+          testId="composer-mode"
+        />
+      );
+    }
+    if (caps?.modes && caps.modes.length === 0) {
       return (
         <CapabilityEmpty
           key="mode"
@@ -287,32 +324,34 @@ export function CapabilityControls() {
         />
       );
     }
-    return (
-      <CapabilitySelect
-        key="mode"
-        icon={<Layers className="h-3.5 w-3.5" />}
-        label="Mode"
-        value={selectedMode}
-        options={modes}
-        onChange={selectMode}
-        pending={isPending("mode")}
-        testId="composer-mode"
-      />
-    );
+    if (caps?.modes) {
+      return (
+        <CapabilitySelect
+          key="mode"
+          icon={<Layers className="h-3.5 w-3.5" />}
+          label="Mode"
+          value={caps.selected.mode}
+          options={caps.modes}
+          onChange={(v) => handleSelect("mode", v)}
+          pending={pendingForKind("mode")}
+          testId="composer-mode"
+        />
+      );
+    }
+    return null;
   };
 
-  // --- Thinking ----------------------------------------------------------
-  // Only render when runtime supplies levels. Never manufacture off/low/etc.
-  // Unavailable → show reason; genuinely absent → omit the control.
   const renderThinking = (): ReactNode => {
-    if (thinkingLevels.length === 0) {
-      if (thinkingReason) {
+    if (!isInitialized) return null;
+    if (caps?.thinkingOptions === null) return null; // unsupported → hidden
+    if (!caps?.thinkingOptions || caps.thinkingOptions.length === 0) {
+      if (caps?.error) {
         return (
           <CapabilityUnavailable
             key="thinking"
-            icon={<Brain className="h-3.5 w-3.5" />}
+            icon={<Bot className="h-3.5 w-3.5" />}
             label="Thinking"
-            reason={thinkingReason}
+            reason={caps.error}
             testId="composer-thinking"
           />
         );
@@ -322,16 +361,25 @@ export function CapabilityControls() {
     return (
       <CapabilitySelect
         key="thinking"
-        icon={<Brain className="h-3.5 w-3.5" />}
+        icon={<Bot className="h-3.5 w-3.5" />}
         label="Thinking"
-        value={thinkingLevel || null}
-        options={thinkingLevels.map((lvl) => ({ id: lvl, label: lvl }))}
-        onChange={setThinkingLevel}
-        pending={isPending("thinking")}
+        value={caps.selected.thinking}
+        options={caps.thinkingOptions}
+        onChange={(v) => handleSelect("thinking", v)}
+        pending={pendingForKind("thinking")}
         testId="composer-thinking"
       />
     );
   };
+
+  if (!caps) {
+    // Bootstrap: show loading state, no fake defaults
+    return (
+      <div className="flex flex-wrap items-center gap-1" data-capabilities>
+        <span className="text-xs text-muted-foreground">Loading capabilities…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-1" data-capabilities>
@@ -339,42 +387,6 @@ export function CapabilityControls() {
       {renderModel()}
       {renderMode()}
       {renderThinking()}
-      {/* Auto-approve toggle — always visible, per-session only */}
-      <AutoApproveToggle />
     </div>
-  );
-}
-
-function AutoApproveToggle() {
-  const autoApprove = useChatStore((s) => s.autoApprove);
-  const setAutoApprove = useChatStore((s) => s.setAutoApprove);
-  const pendingPermissions = useChatStore((s) => s.pendingPermissions.size);
-
-  return (
-    <button
-      type="button"
-      onClick={() => setAutoApprove(!autoApprove)}
-      aria-pressed={autoApprove}
-      aria-label={autoApprove ? "Auto-approve permissions is on" : "Auto-approve permissions is off"}
-      title={autoApprove ? "Auto-approve: permissions resolved automatically" : "Auto-approve: not active, will prompt for each permission"}
-      data-testid="composer-auto-approve"
-      className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-interactive-focus-ring focus-visible:ring-offset-2 ${
-        autoApprove
-          ? "bg-status-success/10 text-status-success hover:bg-status-success/20"
-          : "text-muted-foreground hover:bg-interactive-hover"
-      }`}
-    >
-      {autoApprove ? (
-        <ShieldCheck className="h-3.5 w-3.5" />
-      ) : (
-        <ShieldOff className="h-3.5 w-3.5" />
-      )}
-      <span>AA</span>
-      {pendingPermissions > 0 && !autoApprove && (
-        <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-status-warning px-1 text-[10px] font-bold text-status-warning-foreground">
-          {pendingPermissions}
-        </span>
-      )}
-    </button>
   );
 }

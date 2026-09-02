@@ -1,15 +1,15 @@
 "use client";
 
-import { useChatStore } from "../state/chatStore";
+import { useAssistantTransportState } from "@assistant-ui/react";
 
-// Error-only bar. Connection state and the active agent label live in the
-// header (ChatScreen), so this bar exists solely to surface the last
-// normalized error (`lastError`). Returns null when there is no error so it
-// occupies zero height and never competes with the header.
+
+// Error-only bar sourced from official AssistantTransport state.
+// No longer references any legacy store or WebSocket status.
 export function StatusBar() {
-  const lastError = useChatStore((s) => s.lastError);
+  const status = useAssistantTransportState((s) => s.status);
+  const error = useAssistantTransportState((s) => s.error);
 
-  if (!lastError) return null;
+  if (status !== "error" || !error) return null;
 
   return (
     <div
@@ -17,8 +17,8 @@ export function StatusBar() {
       role="alert"
       aria-live="polite"
     >
-      <span className="truncate" title={lastError.message}>
-        {lastError.message}
+      <span className="truncate" title={error}>
+        {error}
       </span>
     </div>
   );

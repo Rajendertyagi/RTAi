@@ -3,11 +3,11 @@
 import { ThreadPrimitive, SuggestionPrimitive, AuiIf } from "@assistant-ui/react";
 import { useEffect, useRef, type RefObject } from "react";
 import { Menu } from "lucide-react";
-import { useChatStore } from "../state/chatStore";
+import { useAssistantTransportState } from "@assistant-ui/react";
+
 import { MessageItem } from "./Message";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
-import { PermissionDialog } from "./PermissionDialog";
 import { SHARED_CONTENT_COLUMN } from "../lib/shellLayout";
 
 export interface ChatScreenProps {
@@ -45,8 +45,9 @@ export function ChatScreen({
   menuButtonRef,
 }: ChatScreenProps) {
   const scrollRef = useAutoScroll();
-  const isConnected = useChatStore((s) => s.connected);
-  const agentInfo = useChatStore((s) => s.agentInfo);
+  // Transport-derived status indicator (not WebSocket connected)
+  const status = useAssistantTransportState((s) => s.status);
+  const agentInfo = "OpenCode";
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -66,12 +67,32 @@ export function ChatScreen({
         <div className="flex items-center gap-2">
           <span className="text-lg font-medium text-foreground">RTAI</span>
           <span
-            className={`h-2 w-2 rounded-full ${isConnected ? "bg-status-success" : "bg-status-error"}`}
-            aria-label={isConnected ? "Connected" : "Disconnected"}
+            className={`h-2 w-2 rounded-full ${
+              status === "running"
+                ? "bg-status-warning animate-pulse"
+                : status === "error"
+                  ? "bg-status-error"
+                  : status === "complete"
+                    ? "bg-status-success"
+                    : status === "cancelled"
+                      ? "bg-muted-foreground"
+                      : "bg-border"
+            }`}
+            aria-label={
+              status === "running"
+                ? "Running"
+                : status === "error"
+                  ? "Error"
+                  : status === "complete"
+                    ? "Complete"
+                    : status === "cancelled"
+                      ? "Cancelled"
+                      : "Ready"
+            }
           />
         </div>
         <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{agentInfo || "Agent"}</span>
+          <span>{agentInfo}</span>
         </div>
       </header>
 
@@ -126,9 +147,6 @@ export function ChatScreen({
             <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
               {/* Persistent status bar */}
               <StatusBar />
-
-              {/* Permission approval cards */}
-              <PermissionDialog />
 
               {/* Composer card */}
               <Composer />

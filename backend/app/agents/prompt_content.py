@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
 
+from .base import AgentAdapter
+
 # --- Kinds ------------------------------------------------------------------
 
 
@@ -55,6 +57,63 @@ _ALLOWED_EMBEDDED_DOC_MIME_TYPES: frozenset[str] = frozenset(
 # Regex for a clean filename: no path separators, no control chars, no
 # Windows reserved names, no leading/trailing dots or spaces.
 _SAFE_FILENAME_RE = re.compile(r"^[^/\\:*?\"<>|\r\n\x00-\x1f][^/\\:*?\"<>|\r\n\x00-\x1f]{0,254}$")
+
+
+# --- Shared data-URL + message-part attachment validation ---------------------
+
+# Explicit safe MIME allowlist for AssistantTransport message-part image
+# attachments. SVG/XML image types are intentionally excluded: they can carry
+# executable script and are not safe opaque image attachments in this POC.
+_ALLOWED_MESSAGE_IMAGE_MIME_TYPES: frozenset[str] = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/x-icon",
+        "image/avif",
+    }
+)
+
+# Strict data: URL grammar: data:<mime>;base64,<payload>. No other forms
+# (missing prefix, missing MIME, missing ``;base64,`` separator, empty payload,
+# or trailing garbage) are accepted. This is the single shared parser used by
+# both pre-stream message validation and the AssistantTransport endpoint, so the
+# supported-type matrix lives in exactly one provider-neutral location.
+_DATA_URL_RE = re.compile(r"^data:([^;,\s]+);base64,([^,]*)$")
+
+
+def parse_inline_data_url(url: str) -> tuple[str, str]:
+    """Parse an inline ``data:`` URL into ``(mime_type, base64_payload)``.
+
+    Rejects any malformed URL with :class:`PromptValidationError`: missing
+    ``data:`` prefix, missing/empty MIME, missing ``;base64,`` separator,
+    non-image MIME, empty payload, or invalid base64. The payload is validated
+    strictly but NOT retained here; final decode + size limits happen in
+    :func:`make_prompt_content`.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise PromptValidationError("image part must carry a non-empty data URL")
+    match = _DATA_URL_RE.match(url.strip())
+    if match is None:
+        raise PromptValidationError(
+            "image part must be a data: URL of the form data:<mime>;base64,<payload>"
+        )
+    mime = match.group(1).strip().lower()
+    if mime not in _ALLOWED_MESSAGE_IMAGE_MIME_TYPES:
+        raise PromptValidationError(
+            f"unsupported image MIME type {mime!r}; allowed: "
+            f"{sorted(_ALLOWED_MESSAGE_IMAGE_MIME_TYPES)}"
+        )
+    payload = match.group(2)
+    if not payload:
+        raise PromptValidationError("image part data URL must have a non-empty base64 payload")
+    try:
+        base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise PromptValidationError(f"invalid base64 payload in image part: {exc}") from exc
+    return mime, payload
 
 
 # --- Domain model -----------------------------------------------------------
@@ -344,11 +403,64 @@ def validate_prompt_limits(
         )
 
 
+async def submit_prompt_blocks(
+    adapter: AgentAdapter,
+    blocks: list[dict[str, object]],
+) -> None:
+    """Validate and dispatch a multi-block prompt (text + validated attachments).
+
+    Provider-neutral: shared by the AssistantTransport endpoint and its
+    pre-stream validation so conversion/validation lives in exactly one place.
+
+    ``blocks`` are raw PromptContent dicts (keys: kind, name, mime_type, text,
+    data_base64, uri) in message order. Text-only prompts are joined and sent via
+    ``adapter.submit_prompt`` (preserving prior behavior); any non-text block takes
+    the ``submit_prompt_content`` path after capability + limit validation.
+    """
+    if not blocks:
+        return
+
+    # Text-only prompt: preserve exact prior behavior (single joined submit_prompt).
+    if all(b.get("kind") == "text" for b in blocks):
+        joined = "\n".join((b.get("text") or "") for b in blocks).strip()
+        if joined:
+            await adapter.submit_prompt(joined)
+        return
+
+    # Mixed text + attachments (or attachments only): require adapter support.
+    from .capabilities import AttachmentCapabilities
+
+    snap = adapter.capability_snapshot()
+    ac = snap.attachments
+    if not isinstance(ac, AttachmentCapabilities) or not ac.block_types:
+        raise RuntimeError("attachments not supported by this agent")
+
+    parsed = [make_prompt_content(dict(b)) for b in blocks]
+    validate_prompt_limits(
+        parsed,
+        max_item_bytes=ac.max_item_bytes,
+        max_total_bytes=ac.max_total_bytes,
+        max_count=ac.max_count,
+    )
+    kind_map = {
+        "image": "images",
+        "audio": "audio",
+        "embedded_text": "embedded_resources",
+        "embedded_blob": "embedded_resources",
+    }
+    for b in parsed:
+        attr = kind_map.get(b.kind.value)
+        if attr and attr in vars(ac) and not getattr(ac, attr):
+            raise RuntimeError(f"attachment rejected: {b.kind.value} not supported by this agent")
+    await adapter.submit_prompt_content(parsed)
+
+
 __all__ = [
     "PromptKind",
     "PromptContent",
     "PromptValidationError",
     "make_prompt_content",
+    "parse_inline_data_url",
     "validate_prompt_limits",
     "DEFAULT_MAX_ITEM_BYTES",
     "DEFAULT_MAX_TOTAL_BYTES",

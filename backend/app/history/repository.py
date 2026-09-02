@@ -1,6 +1,6 @@
 """Provider-neutral history repository boundary.
 
-Application code (WebSocket handler, REST routes) depends on this Protocol,
+Application code (AssistantTransport endpoint, REST routes) depends on this Protocol,
 never on SQLite directly. This keeps the storage backend swappable and lets
 tests inject a fake repository.
 """

@@ -8,8 +8,8 @@ Ownership and safety (ADR-0006/0007/0008):
 - The exact child handle is retained in an ``OwnedProcess``; basic-auth
   credentials are handed to the child through environment variables only.
 - Readiness waits for ``GET /global/health`` under a hard wall-clock deadline
-  measured with ``time.monotonic()`` (independent of any injected benchmark
-  clock, so frozen clocks cannot extend or hang startup).
+  measured with ``time.monotonic()`` (a wall-clock deadline,
+  so a frozen clock cannot extend or hang startup).
 - Port allocation is inherently racy (the OS releases the ephemeral port
   before OpenCode binds it): bind/startup failures trigger a bounded retry
   with a freshly allocated port. Cleanup between attempts touches only the
@@ -24,8 +24,8 @@ verified process-group / Windows Job Object strategy exists.
 
 Capability discovery queries only documented endpoints; anything the running
 server does not expose becomes an unavailable section with an exact reason.
-Prompt streaming/cancellation are translated minimally for the later fair
-benchmark - this adapter is NOT wired to the frontend in this phase.
+Prompt streaming/cancellation are translated minimally; this adapter is NOT
+wired to the frontend in this phase.
 """
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ from typing import Any, Protocol
 
 from ...core.protocol import MCPServerConfig
 from ...logging_config import log_event, short_id
-from ..acp.prompt_content import PromptContent
 from ..base import AgentAdapter, Emit, SelectionResult
 from ..capabilities import (
     AgentDescriptor,
@@ -52,6 +51,7 @@ from ..capabilities import (
     UnavailableCapability,
 )
 from ..owned_process import DEFAULT_FORCE_TIMEOUT_SECONDS, OwnedProcess
+from ..prompt_content import PromptContent
 from .capability_mapper import (
     AcpCapabilityState,
     command_item,
@@ -141,7 +141,6 @@ class OpenCodeServerAdapter(AgentAdapter):
         bind_retry_attempts: int = _BIND_RETRY_ATTEMPTS,
         username: str | None = None,
         password: str | None = None,
-        benchmark: Any = None,
     ) -> None:
         self._http: HttpTransport = http or StdlibHttpTransport()
         self._launcher = launcher or StdlibServerLauncher()
@@ -153,7 +152,6 @@ class OpenCodeServerAdapter(AgentAdapter):
         self._bind_retry_attempts = bind_retry_attempts
         self._username = username or "opencode"
         self._password = password or ""
-        self._benchmark = benchmark
         self._plan: ServerLaunchPlan | None = None
         self._owned: OwnedProcess | None = None
         self._session_id: str | None = None
@@ -223,8 +221,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                 pid=owned.pid,
                 attempt=attempt + 1,
             )
-            if self._benchmark is not None:
-                self._benchmark.mark("startup")
             try:
                 await self._wait_until_ready(plan, process)
             except ServerStartupError as exc:
@@ -243,12 +239,8 @@ class OpenCodeServerAdapter(AgentAdapter):
                     continue
                 raise RuntimeError(f"OpenCode server startup failed ({exc.kind}): {exc}") from exc
 
-            if self._benchmark is not None:
-                self._benchmark.mark("ready")
             try:
                 await self._create_session(cwd)
-                if self._benchmark is not None:
-                    self._benchmark.mark("session_created")
                 await self._discover_capabilities()
                 self._start_event_stream(plan)
                 self._initialized = True
@@ -395,11 +387,6 @@ class OpenCodeServerAdapter(AgentAdapter):
         else:
             self._capabilities.commands = _missing_section("GET /command returned no commands")
 
-        if self._server_version:
-            self._benchmark_runtime_id("server_version", self._server_version)
-        if selected:
-            self._benchmark_runtime_id("model", selected)
-
         log_event(
             logger,
             logging.INFO,
@@ -422,10 +409,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             return CapabilitySection(items=items)
         return _missing_section("The selected model exposes no reasoning variants.")
 
-    def _benchmark_runtime_id(self, key: str, value: str) -> None:
-        if self._benchmark is not None:
-            self._benchmark.set_runtime_id(key, value)
-
     # -- prompt / cancel ------------------------------------------------------
 
     async def submit_prompt(self, text: str) -> None:
@@ -445,8 +428,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             session=short_id(self._session_id),
             text_length=len(text),
         )
-        if self._benchmark is not None:
-            self._benchmark.mark("prompt_accepted")
         body: dict[str, Any] = {"parts": [{"type": "text", "text": text}]}
 
         # prompt_async accepts model/agent/variant per request, which is how
@@ -484,8 +465,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             session=short_id(self._session_id),
         )
         await self._request_json("POST", f"/session/{self._session_id}/abort")
-        if self._benchmark is not None:
-            self._benchmark.mark("cancelled")
 
     async def _emit_commands_available(self) -> None:
         """Re-push the runtime command list to the UI.
@@ -519,6 +498,12 @@ class OpenCodeServerAdapter(AgentAdapter):
             "models": self._capabilities.models,
             "modes": self._capabilities.modes,
             "thinking_options": self._capabilities.thinking,
+            "selected": {
+                "agent": self._capabilities.selected_agent,
+                "model": self._capabilities.selected_model,
+                "mode": self._capabilities.selected_mode,
+                "thinking": self._capabilities.selected_thinking,
+            },
             "commands": self._capabilities.commands,
             "attachments": UnavailableCapability(
                 UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER,
@@ -635,8 +620,8 @@ class OpenCodeServerAdapter(AgentAdapter):
 
         Terminal conditions: adapter ``close()`` (expected, quiet),
         ``server.instance.disposed`` (clean marker; fails an active turn),
-        or unexpected stream end (normalized connection error + failed
-        benchmark). Only ``session.idle`` completes a turn.
+        or unexpected stream end (normalized connection error). Only
+        ``session.idle`` completes a turn.
         """
         url = f"{plan.base_url}/event"
         headers = {**self._headers(), "Accept": "text/event-stream"}
@@ -687,16 +672,12 @@ class OpenCodeServerAdapter(AgentAdapter):
                 kind=exc.kind,
             )
             await self._fail_active_turn(f"event stream {exc.kind}: {exc}")
-            if self._benchmark is not None:
-                self._benchmark.fail(f"stream_{exc.kind}")
 
         # Unexpected end-of-stream without a terminal marker or close():
         # an SSE disconnect must never look like a silent success.
         if not self._closing and not self._completed_emitted:
             log_event(logger, logging.WARNING, "server_stream_terminated")
             await self._fail_active_turn("OpenCode event stream terminated unexpectedly")
-            if self._benchmark is not None:
-                self._benchmark.fail("stream_dropped")
         log_event(logger, logging.INFO, "server_sse_closed")
 
     async def _handle_global_event(self, event_type: str, properties: dict[str, Any]) -> bool:
@@ -708,8 +689,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             self._closing = True
             if self._awaiting_idle:
                 await self._fail_active_turn("OpenCode server instance was disposed mid-turn")
-                if self._benchmark is not None:
-                    self._benchmark.fail("stream_dropped")
             return True
         if "command" in event_type.lower():
             # Command list changed after session creation - re-push it so the
@@ -728,8 +707,6 @@ class OpenCodeServerAdapter(AgentAdapter):
         """Returns True when the event was consumed by a turn handler."""
         if self._emit is None:
             return True
-        if self._benchmark is not None:
-            self._benchmark.mark("first_event")
 
         if event_type == "message.part.updated":
             raw_part = properties.get("part")
@@ -746,8 +723,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                 # not streamed content, but they do end an open content part.
                 await self._close_open_part()
                 return True
-            if part_type != "reasoning" and self._benchmark is not None:
-                self._benchmark.mark("first_token")
             await self._emit_content_part(part, properties.get("delta"))
             return True
 
@@ -761,8 +736,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                     "server_session_idle",
                     session=short_id(self._session_id),
                 )
-                if self._benchmark is not None:
-                    self._benchmark.mark("completed")
                 emitter = self._emit
                 if emitter is not None:
                     await self._close_open_part()
@@ -778,8 +751,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                     "server_session_error",
                     session=short_id(self._session_id),
                 )
-                if self._benchmark is not None:
-                    self._benchmark.fail("provider_error")
                 emitter = self._emit
                 if emitter is not None:
                     err_props = properties.get("error")
@@ -797,8 +768,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             self._error_emitted = True
             await self._close_open_part()
             await self._emit({"type": "error", "message": message})
-        # The caller records the precise benchmark failure reason so a single
-        # drop is never counted twice.
+            # The error-emitted guard ensures a single failure is never reported twice.
 
     async def _close_open_part(self) -> None:
         """Close the open content part, if any."""

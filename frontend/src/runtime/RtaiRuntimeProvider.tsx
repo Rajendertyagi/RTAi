@@ -2,219 +2,244 @@
 
 import {
   AssistantRuntimeProvider,
-  useExternalStoreRuntime,
+  useAssistantTransportRuntime,
+  unstable_createMessageConverter,
   AuiConfig,
   Suggestions,
-  type ThreadMessageLike,
-  type ThreadUserMessagePart,
+  type AssistantTransportConnectionMetadata,
 } from "@assistant-ui/react";
-import { useEffect, useRef, type ReactNode } from "react";
-import { useChatStore, generateId, type ChatMessage } from "../state/chatStore";
-import { useRtaiSocket } from "../hooks/useRtaiSocket";
-import type { ClientCommand } from "../types/protocol";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useState,
+  type ReactNode,
+} from "react";
 import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
+import { RtaiImageAttachmentAdapter } from "./rtaiImageAttachmentAdapter";
+import type { BackendMessage, RtaiAssistantState } from "../types/rtaiAssistantState";
+// Side-effect import: activates the official AssistantTransport command + state
+// augmentation (Assistant.Commands / Assistant.ExternalState) used below.
+import "./types/assistantTransportAugmentation";
 
-// Minimal runtime provider that wires WebSocket events → assistant-ui store.
-//
-// Tool rendering is NOT registered here: our backend sends arbitrary runtime
-// tool names (discovered via tool_start), so a fixed name→renderer map
-// (defineToolkit) cannot cover them. Instead the UI passes a single fallback
-// renderer via <MessagePrimitive.Parts components={{ tools: { Fallback } }} />,
-// which handles every tool call that has no dedicated UI.
+/**
+ * Runtime provider migrated to official AssistantTransport.
+ *
+ * Browser → POST /assistant → Python assistant-stream → existing ACP/OpenCode adapter.
+ * No WebSocket is opened from the active runtime.
+ *
+ * Verified against locked @assistant-ui/react@0.15.17:
+ * - useAssistantTransportRuntime, AssistantTransportConnectionMetadata, useAssistantTransportState,
+ *   unstable_createMessageConverter all exported via index.d.ts / assistant-transport.js
+ */
 
 const RTAI_CONFIG = AuiConfig({
   suggestions: Suggestions(WELCOME_SUGGESTIONS),
 });
 
-const convertMessage = (msg: ChatMessage): ThreadMessageLike => msg;
+const getInitialCwd = (): string | undefined => {
+  if (typeof window === "undefined") return undefined;
+  const v = localStorage.getItem("project-folder");
+  return v && v.trim() ? v.trim() : undefined;
+};
 
-export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
-  // Subscribe to store
-  const messages = useChatStore((s) => s.messages);
-  const isRunning = useChatStore((s) => s.activeTurnId !== null);
-  const sessionId = useChatStore((s) => s.sessionId);
-  const turnId = useChatStore((s) => s.turnId);
-  const setConnected = useChatStore((s) => s.setConnected);
-  const handleMessage = useChatStore((s) => s.handleMessage);
-  const registerSend = useChatStore((s) => s.registerSend);
+// Derived source-message union for the official converter. Authoritative backend
+// messages already carry stable ids; pending add-message commands supply
+// `{ role, parts }` with no id (pinned AddMessageCommand.message), so the
+// converter assigns its positional fallback id for them.
+type PendingCommand =
+  AssistantTransportConnectionMetadata["pendingCommands"][number];
+type PendingAddMessage = Extract<PendingCommand, { type: "add-message" }>["message"];
+type ConverterSourceMessage = BackendMessage | PendingAddMessage;
 
-  // WebSocket hook — declared before use in the runtime callbacks below.
-  const socketRef = useRef<{ send: (cmd: ClientCommand) => boolean } | null>(null);
-  const socket = useRtaiSocket((event) => {
-    handleMessage(event);
-    if (event.type === "status") {
-      setConnected(event.state === "ready");
+const messageConverter = unstable_createMessageConverter<ConverterSourceMessage>(
+  (msg) => {
+    const content = msg.parts.map((p) => {
+      if (p.type === "tool-call") {
+        const approval = p.approval;
+        return {
+          type: "tool-call" as const,
+          toolCallId: p.toolCallId,
+          toolName: p.toolName,
+          args: p.args,
+          argsText: p.argsText,
+          ...(p.result !== undefined && { result: p.result }),
+          ...(p.isError !== undefined && { isError: p.isError }),
+          ...(p.artifact !== undefined && { artifact: p.artifact }),
+          // Forward the official Assistant UI approval state; Assistant UI derives
+          // requires-action from the approval field. Map only the exact locked
+          // @assistant-ui/core@0.3.16 fields; do not add status or custom fields.
+          ...(approval !== undefined && {
+            approval: {
+              id: approval.id,
+              ...(approval.approved !== undefined && { approved: approval.approved }),
+              ...(approval.reason !== undefined && { reason: approval.reason }),
+              ...(approval.isAutomatic !== undefined && { isAutomatic: approval.isAutomatic }),
+              ...(approval.options !== undefined && {
+                options: approval.options.map((o) => ({
+                  id: o.id,
+                  kind: o.kind,
+                  ...(o.label !== undefined && { label: o.label }),
+                  ...(o.description !== undefined && { description: o.description }),
+                })),
+              }),
+              ...(approval.optionId !== undefined && { optionId: approval.optionId }),
+              ...(approval.resolution !== undefined && { resolution: approval.resolution }),
+            },
+          }),
+        };
+      }
+      if (p.type === "reasoning") {
+        return { type: "reasoning" as const, text: p.text };
+      }
+      if (p.type === "image") {
+        return {
+          type: "image" as const,
+          image: p.image,
+          ...(p.filename !== undefined && { filename: p.filename }),
+        };
+      }
+      if (p.type === "file") {
+        return {
+          type: "file" as const,
+          ...(p.data !== undefined && { data: p.data }),
+          ...(p.uri !== undefined && { uri: p.uri }),
+          ...(p.mimeType !== undefined && { mimeType: p.mimeType }),
+          ...(p.filename !== undefined && { filename: p.filename }),
+        };
+      }
+      return { type: "text" as const, text: p.text };
+    });
+
+    // BackendMessage carries a stable id; pending add-message messages have no id,
+    // so we let unstable_createMessageConverter assign its positional fallback id
+    // (FALLBACK_ID_PREFIX + index). markDelivered() clears pendingCommands before
+    // the first authoritative state update, so a pending message disappears before
+    // its authoritative replacement is visible — no custom dedup is needed.
+    if ("id" in msg) {
+      return { id: msg.id, role: msg.role, content };
     }
+    return { role: msg.role, content };
+  },
+);
+
+const converter = (
+  state: RtaiAssistantState,
+  connectionMetadata: AssistantTransportConnectionMetadata,
+) => {
+  // Optimistic pending add-message commands per official lifecycle.
+  // `AddMessageCommand.message` has no `id` (pinned @assistant-ui/core types);
+  // the official converter assigns each pending message a positional fallback id.
+  // markDelivered() clears pendingCommands before the first authoritative state
+  // update lands, so a pending message disappears before its authoritative
+  // replacement becomes visible — no custom dedup is needed.
+  const pendingMessages = connectionMetadata.pendingCommands.flatMap((c) =>
+    c.type === "add-message" ? [c.message] : []
+  );
+
+  const allMessages: ConverterSourceMessage[] = [...state.messages, ...pendingMessages];
+
+  // Derive a minimal, READ-ONLY capability-command pending status from the
+  // official AssistantTransport connection metadata. We never mutate the
+  // authoritative server-projected `rtaiCapabilities`; this flag only tells the
+  // UI which capability controls are currently queued/in transit so they can be
+  // disabled. The backend idempotently handles any duplicated network request.
+  const pendingTypes = connectionMetadata.pendingCommands.map((c) => {
+    const t = (c as { type?: unknown }).type;
+    return typeof t === "string" ? t : "";
   });
+  const hasPending = (t: string) => pendingTypes.includes(t);
+  const rtaiCapabilitiesPending = {
+    refresh: hasPending("rtai.refreshCapabilities"),
+    agent: hasPending("rtai.selectAgent"),
+    model: hasPending("rtai.selectModel"),
+    mode: hasPending("rtai.selectMode"),
+    thinking: hasPending("rtai.selectThinking"),
+  };
 
-  // Expose send() to the runtime callbacks without re-creating the runtime.
-  useEffect(() => {
-    socketRef.current = { send: socket.send };
-  }, [socket.send]);
-
-  // Register the socket's send with the chat store so selection actions
-  // (select_agent / select_model / select_mode / set_thinking) can dispatch
-  // through the established transport boundary. The store never holds the
-  // WebSocket directly.
-  useEffect(() => {
-    registerSend(socket.send);
-  }, [registerSend, socket.send]);
-
-  // Create the runtime.
-  // T is inferred as ChatMessage from the messages selector.
-  // setMessages receives readonly ChatMessage[] per the ExternalStoreAdapter
-  // contract — no cast needed.
-  // convertMessage is required because ChatMessage does not extend
-  // ThreadMessage; the identity converter is valid since ChatMessage already
-  // satisfies ThreadMessageLike.
-  const runtime = useExternalStoreRuntime({
-    messages,
-    setMessages: (msgs) => {
-      useChatStore.getState().setMessages(msgs);
+  return {
+    messages: messageConverter.toThreadMessages(allMessages),
+    // Surface the full AssistantTransport state (including the namespaced
+    // rtaiCapabilities section projected by the backend) to useAssistantTransportState.
+    // The derived `rtaiCapabilitiesPending` is added as a sibling so it travels with
+    // the client state but is never read or trusted by the backend (which only reads
+    // sessionId/messages/status) and never mutates rtaiCapabilities.
+    state: {
+      ...state,
+      rtaiCapabilitiesPending,
     },
-    convertMessage,
-    isRunning,
-    onNew: async (message) => {
-      // Only user-authored messages are sent as prompts.
-      if (message.role !== "user") return;
-      const text =
-        message.content[0]?.type === "text" ? message.content[0].text : "";
-      if (!text.trim()) return;
+    isRunning:
+      connectionMetadata.isSending || state.status === "running",
+  };
+};
 
-      // Capture snapshot BEFORE any mutation for rollback on send failure.
-      const currentMessages = useChatStore.getState().messages;
+// --- PART 5: provider-owned session lifecycle (the ONLY RTAI-specific session owner) ---
+// Holds a remount epoch, NOT messages/attachments/tool/approval/pending/running state.
+// Bumping the epoch remounts the inner AssistantTransport runtime (keyed by epoch), which
+// starts a genuinely new backend session without a full page reload. New Chat and cwd
+// changes close the old backend session via the DELETE barrier, then bump the epoch.
+interface SessionLifecycle {
+  resetSession: () => void;
+}
 
-      // Identity contract: the conversation session_id is stable across every
-      // turn in one chat. Each prompt gets its own distinct turn_id,
-      // message_id and request_id — none is derived from or embedded in the
-      // session id, and request_id is never reused as message_id.
-      const newTurnId = generateId();
-      const newMessageId = generateId();
-      const newRequestId = generateId();
-      const asstMsgId = `asst-${newTurnId}`;
+const SessionLifecycleContext = createContext<SessionLifecycle | null>(null);
 
-      // Build optimistic messages. User content and attachments are preserved
-      // verbatim from the AppendMessage so the attachment pipeline is intact.
-      // AppendMessage is not a discriminated union, so the role guard above
-      // cannot narrow content at the type level; the cast is safe because the
-      // runtime only delivers user-role messages with user content here.
-      const userMsg: ChatMessage = {
-        role: "user",
-        id: newMessageId,
-        content: message.content as readonly ThreadUserMessagePart[],
-        attachments: message.attachments,
-        createdAt: new Date(),
-      };
-      const asstMsg: ChatMessage = {
-        role: "assistant",
-        id: asstMsgId,
-        content: [],
-        status: { type: "running" },
-        createdAt: new Date(),
-      };
+export function useSessionLifecycle(): SessionLifecycle {
+  const ctx = useContext(SessionLifecycleContext);
+  if (!ctx) {
+    throw new Error("useSessionLifecycle must be used within RtaiRuntimeProvider");
+  }
+  return ctx;
+}
 
-      // Optimistic state update: append both messages, set turn identities.
-      useChatStore.setState({
-        turnId: newTurnId,
-        messageId: newMessageId,
-        promptRequestId: newRequestId,
-        cancelRequestId: null,
-        cancelPending: false,
-        cancelError: null,
-        pendingSelections: new Map(),
-        lastError: null,
-        messages: [...currentMessages, userMsg, asstMsg],
-        activeTurnId: newTurnId,
-        activeMessageId: asstMsgId,
-      });
+function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
+  // Fresh per mount: initialState carries NO sessionId, so the backend generates a new
+  // session on the first /assistant POST after a remount. Thereafter the sessionId
+  // round-trips via the converter's external state. All messages, attachments, queued
+  // commands, approvals, running state, and capability state are recreated empty.
+  const initialState: RtaiAssistantState = {
+    cwd: getInitialCwd(),
+    messages: [],
+    status: "ready",
+  };
 
-      // Send prompt via socket
-      const command: ClientCommand = {
-        protocol_version: 1,
-        request_id: newRequestId,
-        type: "prompt",
-        session_id: sessionId,
-        turn_id: newTurnId,
-        message_id: newMessageId,
-        text: text,
-      };
-
-      // Dispatch failure (socket unavailable/disconnected) must not leave the
-      // store stuck in a pending prompt: restore the exact snapshot and surface
-      // an honest error.
-      const sent = socketRef.current?.send(command) ?? false;
-      if (!sent) {
-        // Restore exact pre-mutation snapshot — removes both optimistic messages.
-        // Clear correlations for this turn (none should exist yet, but defensive).
-        const nextCorr = new Map(useChatStore.getState().partCorrelations);
-        const turnPrefix = `${newTurnId}:`;
-        for (const key of nextCorr.keys()) {
-          if (key.startsWith(turnPrefix)) nextCorr.delete(key);
-        }
-
-        useChatStore.setState({
-          messages: currentMessages,
-          turnId: "",
-          messageId: "",
-          promptRequestId: null,
-          activeTurnId: null,
-          activeMessageId: null,
-          cancelRequestId: null,
-          cancelPending: false,
-          cancelError: null,
-          partCorrelations: nextCorr,
-          lastError: {
-            code: "send_failed",
-            message: "Could not send prompt: connection unavailable",
-          },
-        });
-      }
+  const runtime = useAssistantTransportRuntime<RtaiAssistantState>({
+    api: "/assistant",
+    initialState,
+    converter,
+    // Narrow RTAI image adapter enforces the backend MIME allowlist and delegates
+    // conversion/send/remove to the official SimpleImageAttachmentAdapter. No second store.
+    adapters: { attachments: new RtaiImageAttachmentAdapter() },
+    onError: (error, { updateState }) => {
+      // Safe error only, via official updateState callback
+      updateState((s) => ({
+        ...s,
+        status: "error" as const,
+        error: error.message,
+      }));
     },
-    onCancel: async () => {
-      // Each cancel is a distinct protocol command with its own request_id.
-      // It reuses the target prompt's stable session_id and active turn_id,
-      // never the prompt's request_id.
-      const cancelRequestId = generateId();
-      useChatStore.setState({
-        cancelRequestId,
-        cancelPending: true,
-        cancelError: null,
-      });
-      const command: ClientCommand = {
-        protocol_version: 1,
-        request_id: cancelRequestId,
-        type: "cancel",
-        session_id: sessionId,
-        turn_id: turnId,
-      };
-      // Dispatch failure must not leave cancelPending stuck: clear it and
-      // surface an honest error while retaining the active prompt state.
-      const sent = socketRef.current?.send(command) ?? false;
-      if (!sent) {
-        useChatStore.setState({
-          cancelPending: false,
-          cancelError: {
-            code: "send_failed",
-            message: "Could not send cancel: connection unavailable",
-          },
-        });
-      }
-    },
-    onAddToolResult: () => {
-      // Tool results arrive as backend events (tool_result), not client-side
-      // handoff, so this is intentionally a no-op for our architecture.
+    onCancel: ({ updateState }) => {
+      updateState((s) => ({
+        ...s,
+        status: "cancelled" as const,
+      }));
     },
   });
-
-  // Connect on mount
-  useEffect(() => {
-    socket.connect();
-    return () => socket.close();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={RTAI_CONFIG}>
       {children}
     </AssistantRuntimeProvider>
+  );
+}
+
+export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  const resetSession = useCallback(() => setSessionEpoch((e) => e + 1), []);
+
+  return (
+    <SessionLifecycleContext.Provider value={{ resetSession }}>
+      <RtaiAssistantRuntime key={sessionEpoch}>{children}</RtaiAssistantRuntime>
+    </SessionLifecycleContext.Provider>
   );
 }

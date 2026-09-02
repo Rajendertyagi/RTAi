@@ -8,7 +8,7 @@ import {
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { Copy, Check } from "lucide-react";
-import { ToolCard } from "./ToolCard";
+import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
 import { ThinkingAccordion } from "./ThinkingAccordion";
 
 // MarkdownTextPrimitive reads text from React context (TextMessagePartProvider)
@@ -70,8 +70,32 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                     {typeof part.text === "string" ? part.text : ""}
                   </div>
                 );
-              case "tool-call":
-                return part.toolUI ?? <ToolCard {...part} />;
+              case "tool-call": {
+                // Official pinned pattern (MessagePrimitive.GroupedParts): the
+                // enriched part exposes `toolUI` for a registered named tool UI
+                // (framework precedence) and the genuine ToolCallMessagePartComponent
+                // props. Fall back to the RTAI REST-backed ToolFallback wrapper.
+                const { toolUI, ...toolProps } = part;
+                return toolUI ?? <RtaiToolFallback {...toolProps} />;
+              }
+              case "image":
+                // Official converter emits image parts ({type:'image', image: dataURL}).
+                // No official named ImagePart component exists at pinned 0.15.17, so this
+                // minimal leaf renders the official part data without a new renderer system.
+                return part.image ? (
+                  <img
+                    src={part.image}
+                    alt={part.filename ?? "image"}
+                    className="my-1.5 max-h-80 rounded-lg border border-border object-contain"
+                  />
+                ) : null;
+              case "file":
+                // Minimal leaf for official file parts ({type:'file', filename?, mimeType?}).
+                return (
+                  <div className="my-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
+                    {part.filename ?? part.mimeType ?? "file attachment"}
+                  </div>
+                );
               default:
                 return null;
             }

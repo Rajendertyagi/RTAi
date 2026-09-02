@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.116,<1",
     "uvicorn[standard]>=0.35,<1",
     "agent-client-protocol==0.12.1",
+    "assistant-stream==0.0.36",
 ]
 
 [dependency-groups]

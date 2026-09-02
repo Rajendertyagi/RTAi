@@ -154,6 +154,9 @@ class CapabilitySnapshot:
     models: CapabilitySection[ModelDescriptor] = field(default_factory=_pending_section)
     modes: CapabilitySection[ModeDescriptor] = field(default_factory=_pending_section)
     thinking_options: CapabilitySection[ThinkingOption] = field(default_factory=_pending_section)
+    # Current server-selected value per capability kind, mirrored from SelectionKind.
+    # None means no selection is known (distinct from an empty option list).
+    selected: dict[str, str | None] = field(default_factory=dict)
     commands: CapabilitySection[CommandDescriptor] = field(default_factory=_pending_section)
     attachments: AttachmentCapabilities | UnavailableCapability = field(
         default_factory=lambda: UnavailableCapability(
