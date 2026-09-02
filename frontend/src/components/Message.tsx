@@ -9,7 +9,6 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { Copy, Check } from "lucide-react";
 import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
-import { ThinkingAccordion } from "./ThinkingAccordion";
 
 // MarkdownTextPrimitive reads text from React context (TextMessagePartProvider)
 // and its props are incompatible with TextMessagePartProps. We must not spread
@@ -38,7 +37,13 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
     <MessagePrimitive.Root className="relative flex gap-3 py-2">
       <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 bg-primary text-primary-foreground">AI</div>
       <div className="w-full bg-card border border-border rounded-xl p-2.5 relative group">
-        {/* Group consecutive reasoning + tool-call parts into a collapsible accordion */}
+        {/* Official MessagePrimitive.GroupedParts: group consecutive reasoning
+            and tool-call parts via groupPartByType. The group-chainOfThought
+            group is a simple presentational layout wrapper (no custom state);
+            group-reasoning / group-tool are styled containers for the leaves.
+            This matches the pinned 0.15.17 official composition, where grouped
+            reasoning/tool rendering is supplied by the render callback (the
+            package ships no ReasoningRoot/ToolGroupRoot styled primitives). */}
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ["group-chainOfThought", "group-reasoning"],
@@ -49,9 +54,17 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
             switch (part.type) {
               case "group-chainOfThought":
                 return (
-                  <ThinkingAccordion count={part.indices?.length}>
-                    {children}
-                  </ThinkingAccordion>
+                  <div className="my-1.5 rounded-lg border border-interactive bg-surface-elevated">
+                    <div className="px-3 py-2 text-sm font-medium text-surface-foreground">
+                      Thinking
+                      {part.indices.length > 0 && (
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          ({part.indices.length})
+                        </span>
+                      )}
+                    </div>
+                    <div className="px-3 pb-2">{children}</div>
+                  </div>
                 );
               case "group-reasoning":
                 return (
@@ -96,6 +109,11 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                     {part.filename ?? part.mimeType ?? "file attachment"}
                   </div>
                 );
+              case "indicator":
+                // Synthetic streaming/loading slot emitted by GroupedParts while
+                // the message is running. No extra UI is needed: the text and
+                // reasoning leaves already render streamed content.
+                return null;
               default:
                 return null;
             }
