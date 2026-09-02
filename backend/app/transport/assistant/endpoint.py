@@ -43,6 +43,7 @@ from .models import (
     RTAI_REFRESH_COMMAND,
     RTAI_SELECT_COMMANDS,
     AssistantTransportRequest,
+    _find_parent_index,
     ensure_state_shape,
     prepare_validated_commands,
 )
@@ -219,33 +220,28 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                     if isinstance(parent_id, str) and parent_id:
                         # Truncate after parent (validated to exist in simulation)
                         try:
-                            messages_proxy = controller.state["messages"]  # type: ignore[index]
-                            parent_idx: int | None = None
-                            n = len(messages_proxy)  # type: ignore[arg-type]
-                            for i in range(n):  # type: ignore[arg-type]
-                                try:
-                                    m = messages_proxy[i]  # type: ignore[index]
-                                    # controller.state["messages"][i] is a StateProxy
-                                    # element, not a plain dict, so isinstance(m, dict)
-                                    # is False and would force mid=None. Read id via .get,
-                                    # which works for both plain dicts and StateProxy views.
-                                    mid = m.get("id") if hasattr(m, "get") else None
-                                    if isinstance(mid, str) and mid == parent_id:
-                                        parent_idx = i
-                                        break
-                                except Exception:
-                                    continue
+                            # Operate on the CURRENT authoritative message list.
+                            # controller.state["messages"] is a StateProxy; iterating it
+                            # yields the underlying plain JSON message dicts (the package's
+                            # documented public snapshot: StateProxy.__iter__ ->
+                            # iter(self._get_value())). Parent lookup AND truncation use this
+                            # SAME current snapshot, so a later add-message command in the
+                            # same request (which appends before this loop re-reads state)
+                            # is found. No proxy attribute duck-typing (hasattr) and no stale
+                            # request-time initial_state.
+                            current_messages = list(controller.state["messages"])  # type: ignore[index]
+                            parent_idx = _find_parent_index(current_messages, parent_id)
                             if parent_idx is None:
-                                # Should not happen after pre-validation; treat as stream error.
+                                # Validated pre-stream, but the live list may have been
+                                # mutated by an earlier command in this same request; treat
+                                # as a stream error rather than silently dropping the prompt.
                                 _set_status(controller, "error", error="parent_not_found")
                                 with contextlib.suppress(Exception):
                                     controller.add_error("parent_not_found")
                                 controller.flush()
                                 return
-                            truncated: list[Any] = []
-                            for i in range(parent_idx + 1):  # type: ignore[arg-type]
-                                with contextlib.suppress(Exception):
-                                    truncated.append(initial_state["messages"][i])  # type: ignore[index]
+                            # Keep exactly the parent ancestry; later turns are dropped.
+                            truncated = current_messages[: parent_idx + 1]
                             controller.state["messages"] = truncated  # type: ignore[index]
                         except Exception:
                             _set_status(controller, "error", error="parent_truncate_failed")

@@ -205,6 +205,23 @@ def _validate_rtai_command(model: type[BaseModel], cmd: dict[str, Any], idx: int
         raise RequestValidationError(exc.errors(), body=cmd) from None
 
 
+def _find_parent_index(messages: list[Any], parent_id: str) -> int | None:
+    """Return the index of the message whose stable ``id`` equals ``parent_id``.
+
+    ``messages`` is a plain list of JSON message dicts (a shallow copy of the
+    request state, or the current snapshot produced by iterating a StateProxy,
+    which yields the underlying plain dicts). Each entry must itself be a dict
+    exposing an ``id`` string. Shared by pre-stream validation and runtime
+    application so parent lookup/truncation use one semantics.
+    """
+    for i, m in enumerate(messages):
+        if isinstance(m, dict):
+            mid = m.get("id")
+            if isinstance(mid, str) and mid == parent_id:
+                return i
+    return None
+
+
 def prepare_validated_commands(
     initial_messages: list[Any],
     commands: list[Any],
@@ -289,13 +306,7 @@ def prepare_validated_commands(
 
         # parentId truncation simulation
         if isinstance(parent_id, str) and parent_id:
-            # Locate parent by stable id
-            parent_idx: int | None = None
-            for i, m in enumerate(simulated):
-                mid = m.get("id") if isinstance(m, dict) else None
-                if isinstance(mid, str) and mid == parent_id:
-                    parent_idx = i
-                    break
+            parent_idx = _find_parent_index(simulated, parent_id)
             if parent_idx is None:
                 raise HTTPException(
                     status_code=400, detail={"error": "parent_not_found", "parentId": parent_id}
