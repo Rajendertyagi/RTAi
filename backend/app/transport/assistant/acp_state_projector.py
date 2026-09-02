@@ -158,6 +158,50 @@ def _find_tool_part_index(parts: Any, tool_call_id: str) -> int | None:
     return None
 
 
+def _find_approval_part_index(parts: Any, permission_id: str) -> int | None:
+    """Index of a tool-call part already carrying this permission id (idempotency)."""
+    try:
+        n = len(parts)  # type: ignore[arg-type]
+    except Exception:
+        return None
+    for i in range(n):  # type: ignore[arg-type]
+        try:
+            p = parts[i]  # type: ignore[index]
+            if not isinstance(p, dict) or p.get("type") != "tool-call":
+                continue
+            approval = p.get("approval")
+            if isinstance(approval, dict) and approval.get("id") == permission_id:
+                return i
+        except Exception:
+            continue
+    return None
+
+
+def _find_tool_part_without_approval(parts: Any) -> int | None:
+    """Index of the most recent tool-call part that has no pending approval yet.
+
+    Used to correlate a permission_request whose id diverged from the tool_start
+    part, so the approval attaches to the existing tool-call part instead of
+    creating a duplicate card.
+    """
+    try:
+        n = len(parts)  # type: ignore[arg-type]
+    except Exception:
+        return None
+    for i in range(n - 1, -1, -1):  # type: ignore[arg-type]
+        try:
+            p = parts[i]  # type: ignore[index]
+            if not isinstance(p, dict) or p.get("type") != "tool-call":
+                continue
+            approval = p.get("approval")
+            if isinstance(approval, dict) and approval.get("approved") is not None:
+                continue
+            return i
+        except Exception:
+            continue
+    return None
+
+
 # Block types emitted by the upstream mappers (map_tool_content /
 # server_adapter._server_tool_content) that already have a safe, representable
 # JSON shape. Anything else is dropped so unexpected credentials/metadata never
@@ -773,17 +817,38 @@ class AcpStateProjector:
                 parts = messages[idx]["parts"]
                 tool_idx = _find_tool_part_index(parts, tool_call_id)
                 if tool_idx is None:
-                    tool_name = _derive_tool_name(event)
-                    args, args_text = _derive_tool_args(event)
-                    tool_part: dict[str, Any] = {
-                        "type": "tool-call",
-                        "toolCallId": tool_call_id,
-                        "toolName": tool_name,
-                        "args": args,
-                        "argsText": args_text,
-                    }
-                    parts.append(tool_part)
-                    tool_idx = len(parts) - 1
+                    # No part matched by id. Enforce exactly ONE approval part per
+                    # active permission id: reuse a part that already carries this
+                    # exact permission (idempotent re-delivery), else reuse the most
+                    # recent tool-call part that has no approval yet (the tool_start
+                    # the ACP stream already emitted) so a divergent permission id
+                    # never spawns a second card. Only create a new part when
+                    # neither exists.
+                    dup_idx = _find_approval_part_index(parts, meta["permission_id"])
+                    if dup_idx is not None:
+                        tool_idx = dup_idx
+                    else:
+                        orphan_idx = _find_tool_part_without_approval(parts)
+                        if orphan_idx is not None:
+                            tool_idx = orphan_idx
+                            # Align the permission id to the existing part so
+                            # downstream tool_result/registry correlation stays
+                            # consistent.
+                            aligned = parts[tool_idx].get("toolCallId")
+                            if isinstance(aligned, str) and aligned:
+                                tool_call_id = aligned
+                        else:
+                            tool_name = _derive_tool_name(event)
+                            args, args_text = _derive_tool_args(event)
+                            tool_part: dict[str, Any] = {
+                                "type": "tool-call",
+                                "toolCallId": tool_call_id,
+                                "toolName": tool_name,
+                                "args": args,
+                                "argsText": args_text,
+                            }
+                            parts.append(tool_part)  # type: ignore[attr-defined]
+                            tool_idx = len(parts) - 1
                 part = parts[tool_idx]
                 unsupported = meta.get("unsupported_kinds") or []
                 if unsupported:
@@ -797,10 +862,9 @@ class AcpStateProjector:
                         permission=short_id(meta["permission_id"]),
                         kinds=",".join(unsupported)[:64],
                     )
-                # Always project an official approval so Assistant UI shows a
-                # requires-action state. When there are no supported options we
-                # attach an EMPTY option list plus a safe reason: the user can
-                # only cancel the run (no fake Allow/Deny, no approved guess).
+                # Attach the official approval so Assistant UI derives a
+                # requires-action state and auto-expands the single card. Do not
+                # overwrite an already-resolved approval (approved is set).
                 existing = part.get("approval") if isinstance(part, dict) else None
                 if not isinstance(existing, dict) or existing.get("approved") is None:
                     approval = {

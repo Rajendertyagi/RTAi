@@ -55,7 +55,13 @@ def create_client_class() -> type:
                     {
                         "type": "permission_request",
                         "permission_request_id": perm_id,
-                        "tool_call_id": tool_call_id_of(tool_call, f"tc-{perm_id}"),
+                        # Prefer the real ACP tool call id; if the SDK hands a
+                        # tool_call without one, reuse the most recent tool call
+                        # id the session announced (tool_start) so the permission
+                        # correlates to that part instead of a duplicate card.
+                        "tool_call_id": tool_call_id_of(
+                            tool_call, owner._last_tool_call_id or f"tc-{perm_id}"
+                        ),
                         # Skip protocol-invalid options (no official optionId)
                         # instead of inventing a positional or label-derived id.
                         "options": [
