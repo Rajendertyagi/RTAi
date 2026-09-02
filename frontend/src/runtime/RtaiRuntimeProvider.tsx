@@ -21,7 +21,7 @@ import { RtaiImageAttachmentAdapter } from "./rtaiImageAttachmentAdapter";
 import type { BackendMessage, RtaiAssistantState } from "../types/rtaiAssistantState";
 // Side-effect import: activates the official AssistantTransport command + state
 // augmentation (Assistant.Commands / Assistant.ExternalState) used below.
-import "./types/assistantTransportAugmentation";
+import "../types/assistantTransportAugmentation";
 
 /**
  * Runtime provider migrated to official AssistantTransport.
