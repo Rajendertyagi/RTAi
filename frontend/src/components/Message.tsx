@@ -6,19 +6,29 @@ import {
   ActionBarPrimitive,
   type ThreadMessage,
 } from "@assistant-ui/react";
-import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { Copy, Check } from "lucide-react";
-import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
 
-// MarkdownTextPrimitive reads text from React context (TextMessagePartProvider)
-// and its props are incompatible with TextMessagePartProps. We must not spread
-// the part props instead render it without props so it reads from context.
+// Official Assistant UI Elements (registry-copied at immutable commit
+// b6e7ab88b5e6e60866695d31a08adc3a80f449ff, pinned to @assistant-ui/react@0.15.17).
+import {
+  ReasoningRoot,
+  ReasoningTrigger,
+  ReasoningContent,
+  ReasoningText,
+  Reasoning,
+} from "./assistant-ui/reasoning";
+import {
+  ToolGroupRoot,
+  ToolGroupTrigger,
+  ToolGroupContent,
+} from "./assistant-ui/tool-group";
+import { ToolFallback } from "./assistant-ui/tool-fallback";
+import { Image } from "./assistant-ui/image";
+import { File } from "./assistant-ui/file";
+import { MarkdownText } from "./assistant-ui/markdown-text";
+
 function MarkdownTextWrapper() {
-  return (
-    <div className="text-[0.9375rem] leading-relaxed text-surface-foreground overflow-wrap-break-word">
-      <MarkdownTextPrimitive />
-    </div>
-  );
+  return <MarkdownText />;
 }
 
 export function MessageItem({ message }: { message: ThreadMessage }) {
@@ -37,62 +47,54 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
     <MessagePrimitive.Root className="relative flex gap-3 py-2">
       <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 bg-primary text-primary-foreground">AI</div>
       <div className="w-full bg-card border border-border rounded-xl p-2.5 relative group">
-        {/* Native Assistant UI grouping (pinned 0.15.17): MessagePrimitive.GroupedParts
-            coalesces consecutive reasoning + tool-call parts into one "Thinking" run
-            and renders every node through this single render callback. This is the
-            official 0.15.17 API — there is NO standalone Reasoning/ToolGroup component
-            in this version; defaultComponents.ToolGroup/ReasoningGroup are bare
-            ({children}) => children pass-throughs. So group nodes simply return the
-            rendered subtree (mirroring the native bare defaults) and only leaves that
-            have no native styled renderer get a minimal component. */}
+        {/* Official Assistant UI grouping: MessagePrimitive.GroupedParts coalesces
+            consecutive reasoning and tool-call parts into native group nodes. Each
+            node is rendered with the official Element composition — no custom
+            group/leaf wrappers. The official ToolFallback owns generic tool
+            rendering (including approval via respondToApproval); part.toolUI owns
+            any registered per-tool renderer. */}
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
-            reasoning: ["group-chainOfThought", "group-reasoning"],
-            "tool-call": ["group-chainOfThought", "group-tool"],
+            reasoning: ["group-reasoning"],
+            "tool-call": ["group-tool"],
           })}
         >
           {({ part, children }) => {
             switch (part.type) {
-              // Group nodes: delegate to the framework-rendered subtree. No
-              // custom wrapper/state — this mirrors native defaultComponents.
-              case "group-chainOfThought":
-              case "group-reasoning":
+              case "group-reasoning": {
+                const running = part.status.type === "running";
+                return (
+                  <ReasoningRoot streaming={running}>
+                    <ReasoningTrigger active={running} />
+                    <ReasoningContent aria-busy={running}>
+                      <ReasoningText>{children}</ReasoningText>
+                    </ReasoningContent>
+                  </ReasoningRoot>
+                );
+              }
               case "group-tool":
-                return children;
+                return (
+                  <ToolGroupRoot variant="ghost">
+                    <ToolGroupTrigger
+                      count={part.indices.length}
+                      active={part.status.type === "running"}
+                    />
+                    <ToolGroupContent>{children}</ToolGroupContent>
+                  </ToolGroupRoot>
+                );
               case "text":
                 return <MarkdownTextWrapper />;
               case "reasoning":
-                // No native styled reasoning component in 0.15.17
-                // (defaultComponents.Reasoning renders nothing), so a minimal
-                // leaf renderer is required to display the thinking text.
-                return (
-                  <div className="text-sm text-muted-foreground italic py-0.5">
-                    {typeof part.text === "string" ? part.text : ""}
-                  </div>
-                );
-              case "tool-call": {
-                // toolUI is the framework-provided registered tool UI (native);
-                // RtaiToolFallback is only the backend REST approval bridge,
-                // used when no native tool UI is registered.
-                const { toolUI, ...toolProps } = part;
-                return toolUI ?? <RtaiToolFallback {...toolProps} />;
-              }
+                return <Reasoning />;
+              case "tool-call":
+                // Official Thread contract: prefer a registered tool UI (toolUI),
+                // otherwise the official ToolFallback (which itself calls
+                // respondToApproval for approval gates).
+                return part.toolUI ?? <ToolFallback {...part} />;
               case "image":
-                // No native styled Image component in 0.15.17; minimal leaf.
-                return part.image ? (
-                  <img
-                    src={part.image}
-                    alt={part.filename ?? "image"}
-                    className="my-1.5 max-h-80 rounded-lg border border-border object-contain"
-                  />
-                ) : null;
+                return <Image {...part} />;
               case "file":
-                // No native styled File component in 0.15.17; minimal leaf.
-                return (
-                  <div className="my-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
-                    {part.filename ?? part.mimeType ?? "file attachment"}
-                  </div>
-                );
+                return <File {...part} />;
               case "indicator":
                 return null;
               default:
