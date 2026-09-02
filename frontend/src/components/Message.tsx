@@ -1,9 +1,13 @@
 "use client";
 
 import {
+  AuiIf,
+  ErrorPrimitive,
   MessagePrimitive,
-  groupPartByType,
   ActionBarPrimitive,
+  groupPartByType,
+  useAui,
+  useAuiState,
   type ThreadMessage,
 } from "@assistant-ui/react";
 import { Copy, Check } from "lucide-react";
@@ -25,9 +29,52 @@ import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
 import { Image } from "./assistant-ui/image";
 import { File } from "./assistant-ui/file";
 import { MarkdownText } from "./assistant-ui/markdown-text";
+import { ErrorState } from "./assistant-ui/elements/error-state";
+import { StoppedRun } from "./assistant-ui/elements/stopped-run";
+import { ThinkingIndicator } from "./assistant-ui/elements/thinking-indicator";
 
 function MarkdownTextWrapper() {
   return <MarkdownText />;
+}
+
+function MessageError() {
+  const aui = useAui();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  return (
+    <MessagePrimitive.Error>
+      <ErrorState
+        title="Something went wrong"
+        detail={<ErrorPrimitive.Message />}
+        retrying={isRunning}
+        onRetry={() => aui.message.reload()}
+      />
+    </MessagePrimitive.Error>
+  );
+}
+
+function MessageStoppedRun() {
+  const aui = useAui();
+  const hasTextPart = useAuiState((s) =>
+    s.message.parts.some((p) => p.type === "text"),
+  );
+  const words = useAuiState((s) =>
+    s.message.parts
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text: string }).text)
+      .join(" "),
+  );
+  return (
+    <StoppedRun
+      words={hasTextPart ? [] : words.split(/\s+/).filter(Boolean)}
+      reason="Stopped"
+      onContinue={() => aui.message.reload()}
+      onDiscard={() => aui.message.delete()}
+    />
+  );
+}
+
+function MessageThinking() {
+  return <ThinkingIndicator label="Thinking" />;
 }
 
 export function MessageItem({ message }: { message: ThreadMessage }) {
@@ -104,6 +151,34 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
             }
           }}
         </MessagePrimitive.GroupedParts>
+
+        {/* Official message status elements: runtime error, cancelled run,
+            and the empty-running "Thinking" indicator. Wired with the
+            official MessagePrimitive.Error / ErrorPrimitive gate and the
+            message-scope reload()/delete() methods (no custom REST). */}
+        <MessageError />
+        <AuiIf
+          condition={(s) =>
+            s.message.status?.type === "incomplete" &&
+            s.message.status?.reason === "cancelled"
+          }
+        >
+          <MessageStoppedRun />
+        </AuiIf>
+        <AuiIf
+          condition={(s) =>
+            s.message.role === "assistant" &&
+            s.message.status?.type === "running" &&
+            !s.message.parts.some(
+              (p) =>
+                p.type === "text" ||
+                p.type === "reasoning" ||
+                p.type === "tool-call",
+            )
+          }
+        >
+          <MessageThinking />
+        </AuiIf>
 
         {/* Copy button — floats on hover, hidden on non-last messages */}
         <ActionBarPrimitive.Root
