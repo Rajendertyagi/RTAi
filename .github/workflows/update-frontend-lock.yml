@@ -35,7 +35,9 @@ jobs:
       - name: Fail if any unrelated frontend file changed
         shell: bash
         run: |
-          others=$(git status --porcelain frontend | grep -v -E 'node_modules|package(\.lock)?\.json$' | wc -l)
+          # Strip CR (Windows git status emits CRLF) so the filename filter is
+          # CRLF-safe; otherwise the end-of-line anchor never matches.
+          others=$(git status --porcelain frontend | tr -d '\r' | grep -v -E 'node_modules|package(\.lock)?\.json' | wc -l)
           if [ "$others" -ne 0 ]; then
             echo "::error::Unexpected changes outside package.json / package-lock.json:"
             git status --porcelain frontend
