@@ -1,0 +1,35 @@
+name: gen-lockfile
+
+# Temporary, read-only workflow used ONLY to regenerate frontend/package-lock.json
+# (and the matching dependency entries in frontend/package.json) without running
+# npm locally. It must never push or receive write permissions. The generated
+# files are uploaded as an artifact for the agent to inspect and apply.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Add dependencies and regenerate lockfile
+        working-directory: frontend
+        run: npm install --package-lock-only react-shiki@^0.11.1 remark-gfm@^4.0.1
+
+      - name: Upload generated manifest + lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-lockfile
+          path: |
+            frontend/package.json
+            frontend/package-lock.json
+          if-no-files-found: error
