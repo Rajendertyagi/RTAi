@@ -21,7 +21,7 @@ import {
   ToolGroupTrigger,
   ToolGroupContent,
 } from "./assistant-ui/tool-group";
-import { ToolFallback } from "./assistant-ui/tool-fallback";
+import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
 import { Image } from "./assistant-ui/image";
 import { File } from "./assistant-ui/file";
 import { MarkdownText } from "./assistant-ui/markdown-text";
@@ -92,7 +92,7 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                 // Official Thread contract: prefer a registered tool UI (toolUI),
                 // otherwise the official ToolFallback (which itself calls
                 // respondToApproval for approval gates).
-                return part.toolUI ?? <ToolFallback {...part} />;
+                return part.toolUI ?? <RtaiToolFallback {...part} />;
               case "image":
                 return <Image {...part} />;
               case "file":
