@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  useAssistantTransportState,
   useAui,
   useAuiState,
   type ToolCallMessagePartComponent,
@@ -10,6 +9,7 @@ import {
   type ToolApprovalOption,
   type ToolApprovalResponse,
 } from "@assistant-ui/react";
+import { useRtaiTransportState } from "../useRtaiTransportState";
 
 /**
  * Minimal RTAI-specific REST bridge around the official pinned tool-call part
@@ -25,7 +25,7 @@ import {
  * exact id.
  */
 export const RtaiToolFallback: ToolCallMessagePartComponent = (props) => {
-  const sessionId = useAssistantTransportState((s) => s.sessionId);
+  const sessionId = useRtaiTransportState("sessionId", null);
 
   // Derive the single earliest actionable approval across the whole thread from the
   // official Assistant UI runtime state. No permission store, mirror, polling, timer,

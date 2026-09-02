@@ -3,7 +3,7 @@
 import { ThreadPrimitive, SuggestionPrimitive, AuiIf } from "@assistant-ui/react";
 import { useEffect, useRef, type RefObject } from "react";
 import { Menu } from "lucide-react";
-import { useAssistantTransportState } from "@assistant-ui/react";
+import { useRtaiTransportState } from "./useRtaiTransportState";
 
 import { MessageItem } from "./Message";
 import { Composer } from "./Composer";
@@ -46,7 +46,7 @@ export function ChatScreen({
 }: ChatScreenProps) {
   const scrollRef = useAutoScroll();
   // Transport-derived status indicator (not WebSocket connected)
-  const status = useAssistantTransportState((s) => s.status);
+  const status = useRtaiTransportState("status", "ready");
   const agentInfo = "OpenCode";
 
   return (
