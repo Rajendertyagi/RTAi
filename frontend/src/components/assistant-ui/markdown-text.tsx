@@ -1,7 +1,7 @@
 "use client";
 
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { memo, type FC, type TextMessagePartProps } from "react";
+import { memo, type FC } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
  * `styles/markdown.css` for typography. Runtime behavior matches the prior
  * renderer; no new dependency is introduced.
  */
-const MarkdownTextImpl: FC<Partial<TextMessagePartProps>> = () => {
+const MarkdownTextImpl: FC = () => {
   return (
     <div className="aui-md text-[0.9375rem] leading-relaxed text-surface-foreground overflow-wrap-break-word">
       <MarkdownTextPrimitive />

@@ -312,7 +312,7 @@ const APPROVAL_OPTION_DEFAULT_LABELS: Record<string, string> = {
 };
 
 const isKnownKind = (kind: string) =>
-  Object.hasOwn(APPROVAL_OPTION_DEFAULT_LABELS, kind);
+  Object.prototype.hasOwnProperty.call(APPROVAL_OPTION_DEFAULT_LABELS, kind);
 
 const isAllowKind = (kind: string) =>
   kind === "allow-once" || kind === "allow-always";

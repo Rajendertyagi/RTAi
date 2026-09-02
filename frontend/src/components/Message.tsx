@@ -15,7 +15,6 @@ import {
   ReasoningTrigger,
   ReasoningContent,
   ReasoningText,
-  Reasoning,
 } from "./assistant-ui/reasoning";
 import {
   ToolGroupRoot,
@@ -85,7 +84,10 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
               case "text":
                 return <MarkdownTextWrapper />;
               case "reasoning":
-                return <Reasoning />;
+                // Ungrouped reasoning leaf: the official Reasoning element's
+                // renderer is `() => <MarkdownText />`, so render the same
+                // context-driven markdown directly.
+                return <MarkdownText />;
               case "tool-call":
                 // Official Thread contract: prefer a registered tool UI (toolUI),
                 // otherwise the official ToolFallback (which itself calls
