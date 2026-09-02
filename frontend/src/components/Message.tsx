@@ -37,13 +37,14 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
     <MessagePrimitive.Root className="relative flex gap-3 py-2">
       <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 bg-primary text-primary-foreground">AI</div>
       <div className="w-full bg-card border border-border rounded-xl p-2.5 relative group">
-        {/* Official MessagePrimitive.GroupedParts: group consecutive reasoning
-            and tool-call parts via groupPartByType. The group-chainOfThought
-            group is a simple presentational layout wrapper (no custom state);
-            group-reasoning / group-tool are styled containers for the leaves.
-            This matches the pinned 0.15.17 official composition, where grouped
-            reasoning/tool rendering is supplied by the render callback (the
-            package ships no ReasoningRoot/ToolGroupRoot styled primitives). */}
+        {/* Native Assistant UI grouping (pinned 0.15.17): MessagePrimitive.GroupedParts
+            coalesces consecutive reasoning + tool-call parts into one "Thinking" run
+            and renders every node through this single render callback. This is the
+            official 0.15.17 API — there is NO standalone Reasoning/ToolGroup component
+            in this version; defaultComponents.ToolGroup/ReasoningGroup are bare
+            ({children}) => children pass-throughs. So group nodes simply return the
+            rendered subtree (mirroring the native bare defaults) and only leaves that
+            have no native styled renderer get a minimal component. */}
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ["group-chainOfThought", "group-reasoning"],
@@ -52,49 +53,32 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
         >
           {({ part, children }) => {
             switch (part.type) {
+              // Group nodes: delegate to the framework-rendered subtree. No
+              // custom wrapper/state — this mirrors native defaultComponents.
               case "group-chainOfThought":
-                return (
-                  <div className="my-1.5 rounded-lg border border-interactive bg-surface-elevated">
-                    <div className="px-3 py-2 text-sm font-medium text-surface-foreground">
-                      Thinking
-                      {part.indices.length > 0 && (
-                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                          ({part.indices.length})
-                        </span>
-                      )}
-                    </div>
-                    <div className="px-3 pb-2">{children}</div>
-                  </div>
-                );
               case "group-reasoning":
-                return (
-                  <div className="text-sm text-muted-foreground italic py-1">
-                    {children}
-                  </div>
-                );
               case "group-tool":
-                return <div className="mt-1">{children}</div>;
+                return children;
               case "text":
                 return <MarkdownTextWrapper />;
               case "reasoning":
-                // Streaming reasoning text — show inline when not grouped
+                // No native styled reasoning component in 0.15.17
+                // (defaultComponents.Reasoning renders nothing), so a minimal
+                // leaf renderer is required to display the thinking text.
                 return (
                   <div className="text-sm text-muted-foreground italic py-0.5">
                     {typeof part.text === "string" ? part.text : ""}
                   </div>
                 );
               case "tool-call": {
-                // Official pinned pattern (MessagePrimitive.GroupedParts): the
-                // enriched part exposes `toolUI` for a registered named tool UI
-                // (framework precedence) and the genuine ToolCallMessagePartComponent
-                // props. Fall back to the RTAI REST-backed ToolFallback wrapper.
+                // toolUI is the framework-provided registered tool UI (native);
+                // RtaiToolFallback is only the backend REST approval bridge,
+                // used when no native tool UI is registered.
                 const { toolUI, ...toolProps } = part;
                 return toolUI ?? <RtaiToolFallback {...toolProps} />;
               }
               case "image":
-                // Official converter emits image parts ({type:'image', image: dataURL}).
-                // No official named ImagePart component exists at pinned 0.15.17, so this
-                // minimal leaf renders the official part data without a new renderer system.
+                // No native styled Image component in 0.15.17; minimal leaf.
                 return part.image ? (
                   <img
                     src={part.image}
@@ -103,16 +87,13 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                   />
                 ) : null;
               case "file":
-                // Minimal leaf for official file parts ({type:'file', filename?, mimeType?}).
+                // No native styled File component in 0.15.17; minimal leaf.
                 return (
                   <div className="my-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
                     {part.filename ?? part.mimeType ?? "file attachment"}
                   </div>
                 );
               case "indicator":
-                // Synthetic streaming/loading slot emitted by GroupedParts while
-                // the message is running. No extra UI is needed: the text and
-                // reasoning leaves already render streamed content.
                 return null;
               default:
                 return null;
