@@ -23,6 +23,7 @@ from ...agents.factory import AgentAdapterFactory
 from ...core.protocol import resolve_project_path
 from ...logging_config import log_event, short_id
 from .acp_state_projector import _permission_meta_from_event
+from ...diagnostics import DiagnosticsRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ class AssistantTransportDispatch:
     def __init__(self) -> None:
         self._projector: Any | None = None
         self.permissions: PermissionRegistry = PermissionRegistry()
+        self.diagnostics: DiagnosticsRecorder | None = None
 
     async def __call__(self, event: dict[str, Any]) -> None:
         if isinstance(event, dict) and event.get("type") == "permission_request":
@@ -180,6 +182,9 @@ class AssistantTransportDispatch:
                 )
             return
         await proj.handle(event)
+        # Project the safe recent diagnostics into external state after every event.
+        with contextlib.suppress(Exception):
+            proj.refresh_diagnostics()
         # Update idle activity on every ACP event arrival
         try:
             session_key = getattr(proj, "session_key", None)
@@ -194,6 +199,7 @@ class AssistantTransportDispatch:
         # REST endpoint already resolved (no private-field access from projector).
         with contextlib.suppress(Exception):
             projector.permission_registry = self.permissions
+            projector.diagnostics = self.diagnostics
 
     def unbind(self, projector: Any) -> None:
         if self._projector is projector:
@@ -287,6 +293,7 @@ class AssistantSessionEntry:
         # against turn-finally cleanup and session-close cleanup.
         self.permission_lock = asyncio.Lock()
         self.last_activity = time.monotonic()
+        self.diagnostics: DiagnosticsRecorder = DiagnosticsRecorder()
         self.state: str = "active"  # active | closing | closed | close_failed
         self.close_task: asyncio.Task[bool] | None = None
         self.close_error: str | None = None
@@ -449,7 +456,15 @@ async def _create_adapter_task(
     adapter: AgentAdapter | None = None
     try:
         adapter = factory.create()
+        # One bounded recorder per session, shared by the adapter, the dispatch,
+        # and the session entry so every lifecycle event lands in the same ring
+        # buffer the UI receives through the AssistantTransport external state.
+        rec = DiagnosticsRecorder()
+        # Link the session diagnostics recorder to the adapter so adapter-level
+        # events (config option, prompt, permission response) are recorded.
+        adapter.diag = rec
         dispatch = AssistantTransportDispatch()
+        dispatch.diagnostics = rec
         cwd = _resolve_assistant_cwd(state, config)
         # Ensure cwd exists; create a temp fallback when needed.
         if not cwd.exists():
@@ -477,6 +492,7 @@ async def _create_adapter_task(
         raise
 
     entry = AssistantSessionEntry(adapter, dispatch)
+    entry.diagnostics = rec
     entry.touch()
     close_outside = False
     abort_marker: _ClosingMarker | None = None

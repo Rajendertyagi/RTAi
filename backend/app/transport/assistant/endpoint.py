@@ -545,7 +545,7 @@ async def _apply_capability_command(
             session=short_id(session_key),
             success=True,
         )
-        project_capabilities(controller, snapshot)
+        project_capabilities(controller, snapshot, recorder=getattr(adapter, "diag", None))
         return
     kind = RTAI_SELECT_COMMANDS.get(ctype)
     if kind is None:
@@ -565,7 +565,7 @@ async def _apply_capability_command(
         set_capability_error(controller, kind, "Selection could not be applied.")
         return
     if result.applied:
-        project_capabilities(controller, adapter.capability_snapshot())
+        project_capabilities(controller, adapter.capability_snapshot(), recorder=getattr(adapter, "diag", None))
     else:
         # Preserve prior server-selected value; expose a safe, payload-free error.
         set_capability_error(controller, kind, "Selection could not be applied.")

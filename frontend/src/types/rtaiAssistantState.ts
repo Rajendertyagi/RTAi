@@ -122,4 +122,16 @@ export type RtaiAssistantState = {
   // Read-only, converter-derived flag for in-flight capability commands
   // (see RtaiCapabilitiesPending). Sourced from official pendingCommands.
   rtaiCapabilitiesPending?: RtaiCapabilitiesPending;
+  // Safe, production diagnostics projected from the backend (ring-buffered,
+  // no conversation/tool content). Consumed by the Diagnostics panel only.
+  rtaiDiagnostics?: RtaiDiagnosticEvent[];
+};
+
+// One safe diagnostic event. Only non-sensitive scalar fields are ever present
+// (timestamp, stable event name, level, short correlation id, safe counters).
+export type RtaiDiagnosticEvent = {
+  ts: string;
+  event: string;
+  level: string;
+  [key: string]: unknown;
 };

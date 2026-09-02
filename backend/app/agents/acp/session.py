@@ -47,6 +47,7 @@ from ..opencode.capability_mapper import AcpCapabilityState, command_item
 from ..owned_process import OwnedProcess
 from ..prompt_content import PromptContent, PromptKind, validate_prompt_limits
 from .client import create_client_class
+from ...diagnostics import EVENT
 from .mapping import (
     TERMINAL_STATUSES,
     map_tool_content,
@@ -103,6 +104,9 @@ class AcpSession(AgentAdapter):
         self._load_session_cap: bool | None = None
         self._session_caps: SessionCapabilities | None = None
         self._pending_permissions: dict[str, Any] = {}
+        # Per-session diagnostics recorder (safe, ring-buffered). Linked by the
+        # session entry; None until then so recording is a no-op beforehand.
+        self.diag: Any = None
         # Tool call ids already announced via tool_start; used to distinguish
         # the first sighting from subsequent streaming/final updates.
         self._seen_tool_calls: set[str] = set()
@@ -182,6 +186,7 @@ class AcpSession(AgentAdapter):
                 ),
             )
             self._session_id = session.session_id
+            self._record_diag(EVENT["SESSION_RESOLVED"], "info", session=short_id(self._session_id))
             self._initialized = True
             self._owned.attach_session(self._session_id or "")
             log_event(
@@ -221,19 +226,25 @@ class AcpSession(AgentAdapter):
         # it. The ACP prompt request carries no model field, so the effective
         # model depends entirely on the session config applied here through the
         # single authorized set_config_option path (the same path select() uses).
-        await self._reassert_selected_model()
-        await self._connection.prompt(
-            session_id=self._session_id,
-            prompt=[text_block(text)],
-        )
-        log_event(
-            logger,
-            logging.DEBUG,
-            "acp_turn_completed",
-            session=short_id(self._session_id),
-        )
-        await self._close_open_part()
-        await self._send({"type": "done"})
+        self._record_diag(EVENT["PROMPT_STARTED"], "info", session=short_id(self._session_id), text_length=len(text))
+        try:
+            await self._reassert_selected_model()
+            await self._connection.prompt(
+                session_id=self._session_id,
+                prompt=[text_block(text)],
+            )
+            log_event(
+                logger,
+                logging.DEBUG,
+                "acp_turn_completed",
+                session=short_id(self._session_id),
+            )
+            await self._close_open_part()
+            await self._send({"type": "done"})
+            self._record_diag(EVENT["PROMPT_COMPLETED"], "info", session=short_id(self._session_id))
+        except Exception:
+            self._record_diag(EVENT["PROMPT_FAILED"], "error", session=short_id(self._session_id))
+            raise
 
     async def _reassert_selected_model(self) -> None:
         """Re-apply the selected model to the live session before a prompt.
@@ -250,6 +261,7 @@ class AcpSession(AgentAdapter):
         caps = self._capabilities
         if not caps.selected_model or not caps.model_config_id:
             return
+        self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", config_id=caps.model_config_id)
         try:
             result = await self._connection.set_config_option(
                 session_id=self._session_id,
@@ -268,7 +280,9 @@ class AcpSession(AgentAdapter):
                 session=short_id(self._session_id),
                 model=caps.selected_model,
             )
+            self._record_diag(EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", config_id=caps.model_config_id)
         except Exception as exc:
+            self._record_diag(EVENT["ACP_CONFIG_OPTION_FAILED"], "error", config_id=caps.model_config_id)
             log_event(
                 logger,
                 logging.WARNING,
@@ -423,6 +437,7 @@ class AcpSession(AgentAdapter):
                 count=len(self._pending_permissions),
             )
         self._pending_permissions.clear()
+        self._record_diag(EVENT["SESSION_CLOSED"], "info")
         self._seen_tool_calls.clear()
         self._open_part_id = None
         self._open_part_kind = None
@@ -447,6 +462,10 @@ class AcpSession(AgentAdapter):
             return False
         if not fut.cancelled():
             fut.set_result(option_id)
+        self._record_diag(
+            EVENT["PERMISSION_RESPONDED"], "info",
+            permission=short_id(permission_request_id), option=short_id(option_id),
+        )
         log_event(
             logger,
             logging.DEBUG,
@@ -691,7 +710,6 @@ class AcpSession(AgentAdapter):
         tool_call_id = dumped.get("toolCallId")
         if not isinstance(tool_call_id, str) or not tool_call_id:
             return
-        self._last_tool_call_id = tool_call_id
         status = map_tool_status(dumped.get("status"))
         content = map_tool_content(dumped.get("content"))
         locations = map_tool_locations(dumped.get("locations"))
@@ -759,6 +777,7 @@ class AcpSession(AgentAdapter):
                 ),
             )
         caps = self._capabilities
+        self._record_diag(EVENT["CAPABILITY_SELECTION_REQUESTED"], "info", kind=kind)
         try:
             if kind == "mode" and caps.mode_config_id is None:
                 await self._connection.set_session_mode(
@@ -782,9 +801,15 @@ class AcpSession(AgentAdapter):
                     applied=False,
                     message=f"No {kind} config option was announced by the runtime.",
                 )
-            result = await self._connection.set_config_option(
-                session_id=self._session_id, config_id=config_id, value=value_id
-            )
+            self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", config_id=config_id)
+            try:
+                result = await self._connection.set_config_option(
+                    session_id=self._session_id, config_id=config_id, value=value_id
+                )
+                self._record_diag(EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", config_id=config_id)
+            except Exception:
+                self._record_diag(EVENT["ACP_CONFIG_OPTION_FAILED"], "error", config_id=config_id)
+                raise
             dumped = jsonable_model(result)
             if isinstance(dumped, dict):
                 options = dumped.get("configOptions")
@@ -796,6 +821,12 @@ class AcpSession(AgentAdapter):
             )
         except Exception as exc:
             return SelectionResult(kind=kind, applied=False, message=f"Selection failed: {exc}")
+
+    def _record_diag(self, event: str, level: str = "info", **fields: Any) -> None:
+        """Record a safe diagnostic event if a recorder is linked (no-op otherwise)."""
+        rec = getattr(self, "diag", None)
+        if rec is not None:
+            rec.record(event, level, **fields)
 
     async def _send(self, event: dict[str, Any]) -> None:
         if self._emit:

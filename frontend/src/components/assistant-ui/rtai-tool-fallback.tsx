@@ -88,7 +88,7 @@ export function RtaiToolFallback(props: ToolCallMessagePartProps) {
         setBridgeError({
           kind: "info",
           message:
-            "This approval could not be sent. Please start a new session and try again.",
+            "This approval could not be sent.",
         });
         return;
       }

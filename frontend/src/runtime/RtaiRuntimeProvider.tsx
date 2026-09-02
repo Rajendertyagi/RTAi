@@ -173,6 +173,7 @@ const converter = (
       error: state.error ?? null,
       rtaiCapabilities: state.rtaiCapabilities ?? null,
       rtaiCapabilitiesPending,
+      rtaiDiagnostics: state.rtaiDiagnostics ?? [],
     },
     isRunning:
       connectionMetadata.isSending || state.status === "running",

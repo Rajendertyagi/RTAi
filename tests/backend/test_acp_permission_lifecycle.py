@@ -1,12 +1,24 @@
 """Exactly ONE approval card per active permission id (no duplicate cards).
 
-The ACP ``tool_start`` event carries the real tool call id (e.g. ``tool-abc``),
-while the ``permission_request`` event derives its id from the SDK tool call and
-can fall back to a divergent id (``tc-permN``) when that object lacks one. The
-projector must correlate the permission with the existing tool-start part instead
-of spawning a second tool-call part, so the UI renders a single card and the
-official ToolFallback auto-expands it. This is the regression guard for Issue 2.
+Regression guard for Part 2. The ACP ``tool_start`` event and the
+``permission_request`` event are correlated ONLY by the exact ``toolCallId``.
+Concurrent/interleaved tool calls make any "last tool call" or
+"most-recent unmatched tool" heuristic unsafe, so the projector never falls
+back to one. The tests below pin the corrected behavior:
+
+* matching ``toolCallId``  -> the single tool-call part gains the approval;
+* divergent ``toolCallId`` -> a SEPARATE part is created for the permission
+  (it must NOT be merged into the unrelated ``tool-abc`` part);
+* identical permission id redelivered -> the same part is updated, never
+  duplicated;
+* permission arriving first -> one buffered part keyed by its real toolCallId,
+  and the later ``tool_start`` merges into it (still one card).
+
+If ACP supplies no usable toolCallId the client synthesizes a permission-
+scoped id and the projector renders exactly one safe, non-actionable card;
+that path is covered by the adapter-level contract, not re-tested here.
 """
+
 from __future__ import annotations
 
 import unittest
@@ -56,35 +68,6 @@ async def emit(dispatch, events):
 
 
 class PermissionLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_divergent_tool_call_id_yields_single_part(self) -> None:
-        ctrl, dispatch = build_dispatch()
-        await emit(
-            dispatch,
-            [
-                {
-                    "type": "tool_start",
-                    "tool_call_id": "tool-abc",
-                    "toolName": "fs",
-                    "raw_input": {"cmd": "rm -rf /tmp/x"},
-                },
-                {
-                    "type": "permission_request",
-                    "permission_request_id": "perm-1",
-                    "tool_call_id": "tc-perm-1",  # divergent fallback id
-                    "options": [
-                        {"id": "allow-once", "label": "Allow", "kind": "allow_once"}
-                    ],
-                    "title": "fs",
-                    "kind": "fs",
-                },
-            ],
-        )
-        parts = tool_call_parts(ctrl)
-        self.assertEqual(len(parts), 1, "duplicate tool-call part created")
-        self.assertEqual(parts[0]["toolCallId"], "tool-abc")
-        self.assertEqual(parts[0]["approval"]["id"], "perm-1")
-        self.assertEqual(parts[0]["approval"]["options"][0]["id"], "allow-once")
-
     async def test_matching_tool_call_id_yields_single_part(self) -> None:
         ctrl, dispatch = build_dispatch()
         await emit(
@@ -99,7 +82,7 @@ class PermissionLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "type": "permission_request",
                     "permission_request_id": "perm-1",
-                    "tool_call_id": "tool-abc",
+                    "tool_call_id": "tool-abc",  # exact match
                     "options": [
                         {"id": "allow-once", "label": "Allow", "kind": "allow_once"}
                     ],
@@ -108,9 +91,52 @@ class PermissionLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         )
-        self.assertEqual(len(tool_call_parts(ctrl)), 1)
+        parts = tool_call_parts(ctrl)
+        self.assertEqual(len(parts), 1, "tool part should not be duplicated")
+        self.assertEqual(parts[0]["toolCallId"], "tool-abc")
+        self.assertEqual(parts[0]["approval"]["id"], "perm-1")
+        self.assertEqual(parts[0]["approval"]["options"][0]["id"], "allow-once")
+
+    async def test_divergent_tool_call_id_keeps_separate_parts(self) -> None:
+        # The permission carries a divergent id (tc-perm-1) from the tool_start
+        # part (tool-abc). The projector must NOT merge the approval into the
+        # unrelated tool part; instead it creates exactly one additional part
+        # keyed by the real permission toolCallId. This is the corrected
+        # behavior that replaces the unsafe "last unmatched tool" merge.
+        ctrl, dispatch = build_dispatch()
+        await emit(
+            dispatch,
+            [
+                {
+                    "type": "tool_start",
+                    "tool_call_id": "tool-abc",
+                    "toolName": "fs",
+                    "raw_input": {"cmd": "rm -rf /tmp/x"},
+                },
+                {
+                    "type": "permission_request",
+                    "permission_request_id": "perm-1",
+                    "tool_call_id": "tc-perm-1",  # divergent id
+                    "options": [
+                        {"id": "allow-once", "label": "Allow", "kind": "allow_once"}
+                    ],
+                    "title": "fs",
+                    "kind": "fs",
+                },
+            ],
+        )
+        parts = tool_call_parts(ctrl)
+        self.assertEqual(len(parts), 2, "divergent permission must not merge into tool-abc")
+        tool_part = next(p for p in parts if p["toolCallId"] == "tool-abc")
+        perm_part = next(p for p in parts if p["toolCallId"] == "tc-perm-1")
+        # The unrelated tool part stays free of any approval.
+        self.assertNotIn("approval", tool_part)
+        # Exactly one approval card, keyed by its own toolCallId.
+        self.assertEqual(perm_part["approval"]["id"], "perm-1")
 
     async def test_idempotent_redelivery_keeps_single_part(self) -> None:
+        # Delivering the same permission id twice (with the same toolCallId)
+        # must update the existing part, never create a second card.
         ctrl, dispatch = build_dispatch()
         perm = {
             "type": "permission_request",
@@ -122,23 +148,45 @@ class PermissionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             "title": "fs",
             "kind": "fs",
         }
+        await emit(dispatch, [perm, perm])  # deliver the same permission twice
+        parts = tool_call_parts(ctrl)
+        self.assertEqual(len(parts), 1, "redelivery must not duplicate the card")
+        self.assertEqual(parts[0]["toolCallId"], "tc-perm-1")
+        self.assertEqual(parts[0]["approval"]["id"], "perm-1")
+        # Still exactly one pending approval, never duplicated.
+        self.assertIsNone(parts[0]["approval"].get("approved"))
+
+    async def test_permission_first_buffers_single_part(self) -> None:
+        # Permission arrives before the tool_start that will carry the same
+        # toolCallId. The projector must buffer exactly one part keyed by the
+        # real toolCallId, and the later tool_start must merge into it — still
+        # one card, never two.
+        ctrl, dispatch = build_dispatch()
         await emit(
             dispatch,
             [
+                {
+                    "type": "permission_request",
+                    "permission_request_id": "perm-1",
+                    "tool_call_id": "tool-abc",
+                    "options": [
+                        {"id": "allow-once", "label": "Allow", "kind": "allow_once"}
+                    ],
+                    "title": "fs",
+                    "kind": "fs",
+                },
                 {
                     "type": "tool_start",
                     "tool_call_id": "tool-abc",
                     "toolName": "fs",
                     "raw_input": {"cmd": "rm -rf /tmp/x"},
                 },
-                perm,
-                perm,  # deliver the same permission twice
             ],
         )
         parts = tool_call_parts(ctrl)
-        self.assertEqual(len(parts), 1)
-        # Still exactly one pending approval, never duplicated.
-        self.assertIsNone(parts[0]["approval"].get("approved"))
+        self.assertEqual(len(parts), 1, "permission-first must yield one merged card")
+        self.assertEqual(parts[0]["toolCallId"], "tool-abc")
+        self.assertEqual(parts[0]["approval"]["id"], "perm-1")
 
 
 if __name__ == "__main__":
