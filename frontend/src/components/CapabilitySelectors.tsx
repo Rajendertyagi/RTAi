@@ -11,6 +11,13 @@ import type {
   RtaiCapabilitiesState,
 } from "../types/rtaiAssistantState";
 
+// PART C decision: the official Assistant UI Model Selector is intentionally NOT
+// adopted here. In the pinned @assistant-ui/react@0.15.17 it would require either a
+// model registry / `config.modelName` selection path or a connected selector that
+// owns model state — both conflict with the single authoritative RTAI selection
+// path (the rtai.selectModel / rtai.selectThinking commands). These minimal native
+// <select> controls keep exactly one selection path and submit exact backend
+// option IDs (never labels). Agent/mode use the same controlled pattern.
 type CapabilityKind = "agent" | "model" | "mode" | "thinking";
 
 const COMMAND_BY_KIND: Record<

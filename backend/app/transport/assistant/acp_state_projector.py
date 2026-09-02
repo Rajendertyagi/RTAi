@@ -269,26 +269,16 @@ def _derive_tool_args(event: dict[str, Any]) -> tuple[dict[str, Any], str]:
     return {}, ""
 
 
-# Exact supported official approval option kinds (assistant-ui core 0.3.16).
-_SUPPORTED_APPROVAL_KINDS = frozenset(
-    {"allow-once", "allow-always", "reject-once", "reject-always"}
-)
-# Honest ACP -> official kind aliases allowed ONLY when ACP source semantics are
-# exactly equivalent (allow/approve once -> allow-once, allow always ->
-# allow-always, deny/reject once -> reject-once, deny/reject always ->
-# reject-always). No inference from labels. Unknown kinds are NOT selectable.
-_APPROVAL_KIND_ALIASES = {
-    "allow": "allow-once",
-    "approve": "allow-once",
-    "accept": "allow-once",
-    "allow always": "allow-always",
-    "always-allow": "allow-always",
-    "always-approve": "allow-always",
-    "deny": "reject-once",
-    "reject": "reject-once",
-    "deny always": "reject-always",
-    "always-deny": "reject-always",
-    "always-reject": "reject-always",
+# ACP permission option kinds use underscores (ACP wire format); Assistant UI
+# approval option kinds use hyphens. The ONLY sanctioned translation at this
+# single ACP -> Assistant UI boundary is the explicit four-way conversion below.
+# No speculative aliases (allow/approve/accept, space-separated, or label-based)
+# are accepted; unknown kinds stay unsupported and non-selectable.
+_ACP_TO_AUI_APPROVAL_KIND = {
+    "allow_once": "allow-once",
+    "allow_always": "allow-always",
+    "reject_once": "reject-once",
+    "reject_always": "reject-always",
 }
 
 # Safe, user-facing copy for permission requests that carry no supported option.
@@ -298,19 +288,15 @@ _EXPIRED_REASON = "Permission is no longer active."
 
 
 def _map_approval_kind(kind: str | None) -> str | None:
-    """Map an ACP option kind to an official approval kind, or None if unsupported.
+    """Map an ACP permission option kind to an Assistant UI approval kind.
 
-    Only exact supported kinds and proven-equivalent aliases are accepted.
-    Unknown kinds return None and must NOT become selectable approval options.
+    Only the four documented ACP kinds are accepted. Unknown kinds return None
+    and must NOT become selectable approval options. The exact ACP option id is
+    preserved separately by the caller; only the kind vocabulary is translated.
     """
     if not isinstance(kind, str) or not kind:
         return None
-    if kind in _SUPPORTED_APPROVAL_KINDS:
-        return kind
-    alias = _APPROVAL_KIND_ALIASES.get(kind.lower())
-    if alias is not None:
-        return alias
-    return None
+    return _ACP_TO_AUI_APPROVAL_KIND.get(kind)
 
 
 def _map_approval_option(option: dict[str, Any]) -> dict[str, Any] | None:
