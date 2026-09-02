@@ -100,11 +100,13 @@ const messageConverter = unstable_createMessageConverter<ConverterSourceMessage>
         };
       }
       if (p.type === "file") {
+        // Pinned @assistant-ui/core FileMessagePart requires `data` and `mimeType`
+        // (both string) and has NO `uri` field. The backend supplies both for file
+        // parts; the defaults only guard this defensive branch. `uri` is dropped.
         return {
           type: "file" as const,
-          ...(p.data !== undefined && { data: p.data }),
-          ...(p.uri !== undefined && { uri: p.uri }),
-          ...(p.mimeType !== undefined && { mimeType: p.mimeType }),
+          data: p.data ?? "",
+          mimeType: p.mimeType ?? "application/octet-stream",
           ...(p.filename !== undefined && { filename: p.filename }),
         };
       }
@@ -208,6 +210,9 @@ function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
 
   const runtime = useAssistantTransportRuntime<RtaiAssistantState>({
     api: "/assistant",
+    // Required by pinned AssistantTransportOptions: headers sent with every
+    // /assistant request. No extra headers are needed for this app.
+    headers: {},
     initialState,
     converter,
     // Narrow RTAI image adapter enforces the backend MIME allowlist and delegates
