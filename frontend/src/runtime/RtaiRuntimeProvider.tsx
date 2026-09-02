@@ -3,6 +3,7 @@
 import {
   AssistantRuntimeProvider,
   useAssistantTransportRuntime,
+  useAuiState,
   unstable_createMessageConverter,
   AuiConfig,
   Suggestions,
@@ -197,6 +198,24 @@ export function useSessionLifecycle(): SessionLifecycle {
   return ctx;
 }
 
+function TransportReadyGate({ children }: { children: ReactNode }) {
+  // Official readiness signal: the AssistantTransport-backed main thread mounts
+  // asynchronously after a placeholder (empty) thread. While that placeholder is
+  // active, `thread.isLoading` is true and `useAssistantTransportState` throws
+  // (its `thread.extras` lacks the transport symbol). Gate every transport-state
+  // consumer behind this single boundary so they only render against the real
+  // transport thread.
+  const isLoading = useAuiState((s) => s.thread.isLoading);
+  if (isLoading) {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center bg-background text-sm text-muted-foreground">
+        Loading assistant…
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
   // Fresh per mount: initialState carries NO sessionId, so the backend generates a new
   // session on the first /assistant POST after a remount. Thereafter the sessionId
@@ -236,7 +255,7 @@ function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={RTAI_CONFIG}>
-      {children}
+      <TransportReadyGate>{children}</TransportReadyGate>
     </AssistantRuntimeProvider>
   );
 }

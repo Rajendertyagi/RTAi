@@ -1,13 +1,13 @@
 "use client";
 
-import { useRtaiTransportState } from "./useRtaiTransportState";
+import { useAssistantTransportState } from "@assistant-ui/react";
 
 
 // Error-only bar sourced from official AssistantTransport state.
 // No longer references any legacy store or WebSocket status.
 export function StatusBar() {
-  const status = useRtaiTransportState("status", "ready");
-  const error = useRtaiTransportState("error", null);
+  const status = useAssistantTransportState((s) => s.status);
+  const error = useAssistantTransportState((s) => s.error);
 
   if (status !== "error" || !error) return null;
 

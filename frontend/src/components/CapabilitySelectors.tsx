@@ -4,12 +4,12 @@ import type { ReactNode } from "react";
 import { Bot, Brain, Cpu, Layers } from "lucide-react";
 import {
   useAssistantTransportSendCommand,
+  useAssistantTransportState,
   } from "@assistant-ui/react";
 import type {
   RtaiCapabilityItem,
   RtaiCapabilitiesState,
 } from "../types/rtaiAssistantState";
-import { useRtaiTransportState } from "./useRtaiTransportState";
 
 type CapabilityKind = "agent" | "model" | "mode" | "thinking";
 
@@ -152,8 +152,8 @@ function CapabilityEmpty({
 }
 
 export function CapabilityControls() {
-  const caps = useRtaiTransportState("rtaiCapabilities", null);
-  const pending = useRtaiTransportState("rtaiCapabilitiesPending", null);
+  const caps = useAssistantTransportState((s) => s.rtaiCapabilities);
+  const pending = useAssistantTransportState((s) => s.rtaiCapabilitiesPending);
   const sendCommand = useAssistantTransportSendCommand();
 
   // Bootstrap: if not initialized, show loading and trigger refresh once via pendingCommand
