@@ -4,8 +4,14 @@ name: gen-lockfile
 # (and the matching dependency entries in frontend/package.json) without running
 # npm locally. It must never push or receive write permissions. The generated
 # files are uploaded as an artifact for the agent to inspect and apply.
+#
+# NOTE: GitHub only allows the `workflow_dispatch` API for workflows on the
+# default branch, so on this feature branch we trigger it via a push to the
+# branch instead. It is removed entirely before the final production commit.
 on:
   workflow_dispatch:
+  push:
+    branches: [feature/react-ui-foundation]
 
 permissions:
   contents: read
