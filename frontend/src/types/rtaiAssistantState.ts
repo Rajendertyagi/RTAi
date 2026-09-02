@@ -69,7 +69,10 @@ export type BackendMessage = {
   parts: BackendMessagePart[];
 };
 
-// One capability option (exact adapter id + optional display label).
+// One capability option (exact adapter id + display label).
+// NOTE: kept JSON-serializable (no optional/`undefined` members) because
+// RtaiCapabilitiesState is projected into AssistantTransport's external `state`,
+// which must satisfy `ReadonlyJSONValue` (undefined is not a JSON value).
 export type RtaiCapabilityItem = {
   id: string;
   label: string;
@@ -93,7 +96,7 @@ export type RtaiCapabilitiesState = {
     mode: string | null;
     thinking: string | null;
   };
-  error: { kind: string; message: string } | null;
+  error: { reason_code: string; reason_message: string } | null;
 };
 
 // Minimal, READ-ONLY, FRONTEND-DERIVED status of in-flight capability commands.

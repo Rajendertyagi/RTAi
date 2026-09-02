@@ -46,7 +46,7 @@ function CapabilitySelect({
   return (
     <label
       className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover"
-      title={selected?.description ?? selected?.label ?? label}
+      title={selected?.label ?? label}
     >
       <span className="shrink-0 opacity-70" aria-hidden="true">
         {icon}
@@ -61,7 +61,7 @@ function CapabilitySelect({
       >
         {value == null && <option value="">Select…</option>}
         {options.map((o) => (
-          <option key={o.id} value={o.id} title={o.description ?? o.label}>
+          <option key={o.id} value={o.id} title={o.label}>
             {o.label}
           </option>
         ))}

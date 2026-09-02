@@ -29,7 +29,6 @@ const RTAI_IMAGE_ACCEPT =
 const RTAI_ALLOWED_MIME = new Set(RTAI_IMAGE_ACCEPT.split(","));
 
 type PendingAttachment = Parameters<AttachmentAdapter["send"]>[0];
-type Attachment = Parameters<AttachmentAdapter["remove"]>[0];
 
 export class RtaiImageAttachmentAdapter implements AttachmentAdapter {
   public accept = RTAI_IMAGE_ACCEPT;
@@ -49,7 +48,7 @@ export class RtaiImageAttachmentAdapter implements AttachmentAdapter {
     return this.inner.send(attachment);
   }
 
-  public remove(attachment: Attachment) {
-    return this.inner.remove(attachment);
+  public remove() {
+    return this.inner.remove();
   }
 }

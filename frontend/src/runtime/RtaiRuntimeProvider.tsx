@@ -15,6 +15,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { ReadonlyJSONObject } from "assistant-stream/utils";
 import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
 import { RtaiImageAttachmentAdapter } from "./rtaiImageAttachmentAdapter";
 import type { BackendMessage, RtaiAssistantState } from "../types/rtaiAssistantState";
@@ -61,7 +62,7 @@ const messageConverter = unstable_createMessageConverter<ConverterSourceMessage>
           type: "tool-call" as const,
           toolCallId: p.toolCallId,
           toolName: p.toolName,
-          args: p.args,
+          args: p.args as ReadonlyJSONObject,
           argsText: p.argsText,
           ...(p.result !== undefined && { result: p.result }),
           ...(p.isError !== undefined && { isError: p.isError }),
@@ -96,7 +97,6 @@ const messageConverter = unstable_createMessageConverter<ConverterSourceMessage>
         return {
           type: "image" as const,
           image: p.image,
-          ...(p.filename !== undefined && { filename: p.filename }),
         };
       }
       if (p.type === "file") {
@@ -159,13 +159,16 @@ const converter = (
 
   return {
     messages: messageConverter.toThreadMessages(allMessages),
-    // Surface the full AssistantTransport state (including the namespaced
-    // rtaiCapabilities section projected by the backend) to useAssistantTransportState.
-    // The derived `rtaiCapabilitiesPending` is added as a sibling so it travels with
-    // the client state but is never read or trusted by the backend (which only reads
-    // sessionId/messages/status) and never mutates rtaiCapabilities.
+    // The external `state` projected to the runtime must be JSON-serializable
+    // (ReadonlyJSONValue). It carries the namespaced rtaiCapabilities section from the
+    // backend plus the converter-derived rtaiCapabilitiesPending flag. Authoritative
+    // messages live in `messages` above and are intentionally NOT mirrored here.
     state: {
-      ...state,
+      sessionId: state.sessionId ?? null,
+      cwd: state.cwd ?? null,
+      status: state.status,
+      error: state.error ?? null,
+      rtaiCapabilities: state.rtaiCapabilities ?? null,
       rtaiCapabilitiesPending,
     },
     isRunning:

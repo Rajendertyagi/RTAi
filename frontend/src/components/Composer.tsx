@@ -35,9 +35,9 @@ export function Composer() {
                 key={attachment.id}
                 className="m-3 mb-0 flex items-center gap-2 rounded-lg border border-interactive bg-surface p-2"
               >
-                {attachment.type === "image" && attachment.content[0]?.type === "image" ? (
+                {attachment.type === "image" && attachment.content?.[0]?.type === "image" ? (
                   <img
-                    src={attachment.content[0].image}
+                    src={attachment.content?.[0]?.image}
                     alt={attachment.name}
                     className="h-10 w-10 rounded object-cover"
                   />
