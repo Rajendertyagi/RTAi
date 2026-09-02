@@ -317,11 +317,29 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                 # projected capability state already written to controller.state.
                 _set_status(controller, "ready")
                 controller.flush()
+                if logger.isEnabledFor(logging.DEBUG):
+                    log_event(
+                        logger,
+                        logging.DEBUG,
+                        "assistant_state_flushed",
+                        session=short_id(session_key),
+                        status="ready",
+                        capability_only=not has_add_message,
+                    )
                 return
 
             _ensure_assistant_message(controller)
             _set_status(controller, "running")
             controller.flush()
+            if logger.isEnabledFor(logging.DEBUG):
+                log_event(
+                    logger,
+                    logging.DEBUG,
+                    "assistant_state_flushed",
+                    session=short_id(session_key),
+                    status="running",
+                    capability_only=False,
+                )
 
             # Bind projector to the stable dispatch while holding the lock (prompt path only)
             if entry is not None:
@@ -505,9 +523,29 @@ async def _apply_capability_command(
         session=short_id(session_key),
         type=str(cmd.get("type")),
     )
-    ctype = cmd.get("type")
     if ctype == RTAI_REFRESH_COMMAND:
-        project_capabilities(controller, adapter.capability_snapshot())
+        # --- DIAGNOSTIC (gated by RTAI_LOG_LEVEL=DEBUG): adapter snapshot result ---
+        # Logs only success/failure + exception class (never snapshot contents/ids).
+        try:
+            snapshot = adapter.capability_snapshot()
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "assistant_capability_snapshot",
+                session=short_id(session_key),
+                success=False,
+                error=type(exc).__name__,
+            )
+            raise
+        log_event(
+            logger,
+            logging.DEBUG,
+            "assistant_capability_snapshot",
+            session=short_id(session_key),
+            success=True,
+        )
+        project_capabilities(controller, snapshot)
         return
     kind = RTAI_SELECT_COMMANDS.get(ctype)
     if kind is None:

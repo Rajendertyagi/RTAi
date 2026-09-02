@@ -434,7 +434,6 @@ def project_capabilities(controller: RunController, snapshot: Any) -> None:
                 thinking=len(caps.get("thinkingOptions") or []),
                 selected_kinds=",".join(_sel.keys()),
             )
-        controller.state["rtaiCapabilities"] = caps
     except Exception:
         pass
 

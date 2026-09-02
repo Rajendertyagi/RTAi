@@ -213,6 +213,13 @@ function TransportReadyGate({ children }: { children: ReactNode }) {
       </div>
     );
   }
+  if (
+    typeof window !== "undefined" &&
+    typeof window.localStorage !== "undefined" &&
+    window.localStorage.getItem("rtai-debug") === "1"
+  ) {
+    console.debug("[rtai-capability]", "transport-thread-ready");
+  }
   return <>{children}</>;
 }
 

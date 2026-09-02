@@ -12,11 +12,26 @@ import type {
 } from "../types/rtaiAssistantState";
 
 // --- Capability bootstrap diagnostics (gated; enable via localStorage["rtai-debug"]="1") ---
-// Logs only stage names and booleans (never capability values/payloads).
+// Logs only stage names, booleans, short ids and counts (never capability values/payloads).
 const RTAI_DIAG_ENABLED =
   typeof window !== "undefined" &&
   typeof window.localStorage !== "undefined" &&
   window.localStorage.getItem("rtai-debug") === "1";
+// Short correlation id (client side, pre-session) so one bootstrap run can be
+// followed across stages without leaking the full backend session id.
+const RTAI_SHORT_ID = (): string => {
+  const buf = new Uint32Array(2);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(buf);
+  } else {
+    buf[0] = Math.floor(Math.random() * 0xffffffff);
+    buf[1] = Math.floor(Math.random() * 0xffffffff);
+  }
+  return Array.from(buf)
+    .map((n) => n.toString(16).padStart(8, "0"))
+    .join("")
+    .slice(0, 8);
+};
 const RTAI_DIAG = (stage: string, meta?: Record<string, unknown>) => {
   if (!RTAI_DIAG_ENABLED) return;
   console.debug("[rtai-capability]", stage, meta ?? "");
@@ -172,10 +187,12 @@ function CapabilityEmpty({
 export function CapabilityControls() {
   const caps = useAssistantTransportState((s) => s.rtaiCapabilities);
   const pending = useAssistantTransportState((s) => s.rtaiCapabilitiesPending);
+  const sessionId = useAssistantTransportState((s) => s.sessionId);
   const sendCommand = useAssistantTransportSendCommand();
 
   const isInitialized = caps?.initialized ?? false;
   const refreshPending = pending?.refresh ?? false;
+  const corrRef = useRef<string>(RTAI_SHORT_ID());
 
   // Bootstrap lifecycle over the official AssistantTransport command queue only:
   //   not-requested -> pending -> initialized | failed
@@ -189,27 +206,50 @@ export function CapabilityControls() {
   const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
-    RTAI_DIAG("bootstrap", { hasCaps: !!caps, initialized: caps?.initialized ?? null, refreshPending, failed });
+    const corr = corrRef.current;
+    const sidShort = sessionId ? sessionId.slice(-8) : null;
+    const pendingTypes: string[] = [];
+    if (pending) {
+      if (pending.refresh) pendingTypes.push("rtai.refreshCapabilities");
+      if (pending.agent) pendingTypes.push("rtai.selectAgent");
+      if (pending.model) pendingTypes.push("rtai.selectModel");
+      if (pending.mode) pendingTypes.push("rtai.selectMode");
+      if (pending.thinking) pendingTypes.push("rtai.selectThinking");
+    }
+    RTAI_DIAG("bootstrap-considered", {
+      corr,
+      hasCaps: !!caps,
+      initialized: caps?.initialized ?? null,
+      refreshPending,
+      failed,
+      sessionId: sidShort,
+      error: caps?.error ? caps.error.reason_code : null,
+      pendingTypes,
+      pendingCount: pendingTypes.length,
+    });
     if (caps) {
+      RTAI_DIAG("inFlightDiscovery-removed", { corr, sessionId: sidShort });
       setFailed(false);
       return;
     }
     if (refreshPending) {
       sawPendingRef.current = true;
       setFailed(false);
+      RTAI_DIAG("refresh-skipped", { corr, reason: "refreshPending" });
       return;
     }
     if (requestedRef.current) {
+      RTAI_DIAG("refresh-skipped", { corr, reason: "alreadyRequested" });
       // Queued a refresh, saw it go pending, and now it is neither pending nor
       // resolved: the request failed or was dropped. Surface Retry instead of a
-      // permanent spinner. sawPendingRef avoids a StrictMode double-invoke false positive.
+      // permanent spinner. sawPendingRef avoids a StrictMode false positive.
       if (sawPendingRef.current) setFailed(true);
       return;
     }
     // Not initialized, not pending, never requested: queue exactly one refresh.
     requestedRef.current = true;
     try {
-      RTAI_DIAG("refresh-queued");
+      RTAI_DIAG("refresh-queued", { corr, reason: "bootstrap-mount" });
       sendCommand({ type: "rtai.refreshCapabilities" } as Parameters<typeof sendCommand>[0]);
       setFailed(false);
     } catch {
@@ -468,6 +508,10 @@ export function CapabilityControls() {
     );
   }
 
+  RTAI_DIAG("render-ready", {
+    corr: corrRef.current,
+    sessionId: sessionId ? sessionId.slice(-8) : null,
+  });
   return (
     <div className="flex flex-wrap items-center gap-1" data-capabilities>
       {renderAgent()}
