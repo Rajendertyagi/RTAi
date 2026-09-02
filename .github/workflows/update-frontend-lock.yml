@@ -1,0 +1,57 @@
+name: Update frontend lockfile (model selector dependencies)
+
+# Temporary, manually-dispatched workflow.
+# Purpose: install the verified genuine dependency (cmdk) required by the official
+# Assistant UI registry ModelSelector, and regenerate frontend/package-lock.json
+# via `npm install` (never hand-edited). The workflow is removed from the repo
+# in a separate commit once the lockfile commit is present.
+on:
+  workflow_dispatch:
+
+# Required so the workflow can commit + push the regenerated manifests back.
+permissions:
+  contents: write
+
+jobs:
+  update-lock:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout dispatched branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Node (matches frontend CI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install verified genuine dependency (cmdk)
+        working-directory: frontend
+        run: npm install cmdk
+
+      - name: Fail if any unrelated frontend file changed
+        shell: bash
+        run: |
+          others=$(git status --porcelain frontend | grep -v -E 'node_modules|package(\.lock)?\.json$' | wc -l)
+          if [ "$others" -ne 0 ]; then
+            echo "::error::Unexpected changes outside package.json / package-lock.json:"
+            git status --porcelain frontend
+            exit 1
+          fi
+          echo "Only frontend/package.json and frontend/package-lock.json were modified."
+
+      - name: Commit and push manifests
+        shell: bash
+        run: |
+          git config user.email "agnes@sapiens.ai"
+          git config user.name "AgnesCode"
+          git add frontend/package.json frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "No manifest changes; nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(frontend): add model selector dependencies"
+          git push
