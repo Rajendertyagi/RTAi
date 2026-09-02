@@ -1,8 +1,7 @@
 "use client";
 
-import { AuiIf, ChainOfThoughtPrimitive } from "@assistant-ui/react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type { ReactNode } from "react";
 
 interface ThinkingAccordionProps {
   children: ReactNode;
@@ -11,30 +10,41 @@ interface ThinkingAccordionProps {
 }
 
 /**
- * Collapsible accordion for grouping reasoning + tool-call parts.
+ * Collapsible container for the official MessagePrimitive.GroupedParts
+ * "group-chainOfThought" group.
  *
- * Uses ChainOfThoughtPrimitive (the primitive-level API). The legacy
- * ChainOfThoughtPrimitive.Parts reads reasoning/tool context from the
- * nearest MessagePrimitive.Root. GroupedParts drives the same grouping
- * logic at a higher level; this component is the visual container.
+ * This is a plain React component: it owns only its own open/closed UI state
+ * and renders `children` (the grouped reasoning + tool-call subtree) inside the
+ * GroupedParts-provided part scope. It deliberately does NOT use the legacy
+ * ChainOfThoughtPrimitive or read `s.chainOfThought`.
  *
- * Shows the accordion only when there are children (empty groups are
- * filtered at the GroupedParts level, so this never renders an empty
- * accordion).
+ * The legacy ChainOfThoughtPrimitive.Root / `s.chainOfThought` scope is only
+ * available when reasoning/tool parts are rendered through the legacy
+ * components.ChainOfThought path. When those parts arrive through the new
+ * GroupedParts path (as RTAI does), that scope is never created, so accessing
+ * `s.chainOfThought` throws "The current scope does not have a 'chainOfThought'
+ * property." Standard rendering and legacy ChainOfThought are mutually exclusive;
+ * this component keeps the renderer on the single supported GroupedParts mode.
  */
 export function ThinkingAccordion({
   children,
   count,
 }: ThinkingAccordionProps) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <ChainOfThoughtPrimitive.Root className="my-1.5">
-      <ChainOfThoughtPrimitive.AccordionTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-surface-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring">
-        <AuiIf condition={(s) => s.chainOfThought.collapsed}>
+    <div className="my-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-surface-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
+      >
+        {open ? (
           <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-        </AuiIf>
-        <AuiIf condition={(s) => !s.chainOfThought.collapsed}>
+        ) : (
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-        </AuiIf>
+        )}
         <span className="flex-1 text-left font-medium text-sm">
           Thinking
           {count !== undefined && count > 0 && (
@@ -43,12 +53,12 @@ export function ThinkingAccordion({
             </span>
           )}
         </span>
-      </ChainOfThoughtPrimitive.AccordionTrigger>
-      <AuiIf condition={(s) => !s.chainOfThought.collapsed}>
+      </button>
+      {open && (
         <div className="rounded-b-lg border-x border-b border-interactive bg-surface-elevated px-3 py-2">
           {children}
         </div>
-      </AuiIf>
-    </ChainOfThoughtPrimitive.Root>
+      )}
+    </div>
   );
 }
