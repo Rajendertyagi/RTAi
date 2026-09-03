@@ -58,8 +58,13 @@ class OpenCodeSession(AcpSession):
             return
         caps = self._capabilities
         if not caps.selected_model or not caps.model_config_id:
+            self._record_diag(
+                EVENT["MODEL_REASSERTED"], "warn", kind="model", status="skipped"
+            )
+            self._record_diag(EVENT["CAPABILITY_SELECTION_UNAVAILABLE"], "warn", kind="model", reason="reassert_skipped")
             return
-        self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", config_id=caps.model_config_id)
+        self._record_diag(EVENT["MODEL_REASSERTED"], "info", kind="model", status="attempted")
+        self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", kind="model")
         try:
             result = await self._connection.set_config_option(
                 session_id=self._session_id,
@@ -79,11 +84,12 @@ class OpenCodeSession(AcpSession):
                 model=caps.selected_model,
             )
             self._record_diag(
-                EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", config_id=caps.model_config_id
+                EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", kind="model"
             )
+            self._record_diag(EVENT["MODEL_REASSERTED"], "info", kind="model", status="confirmed")
         except Exception as exc:
             self._record_diag(
-                EVENT["ACP_CONFIG_OPTION_FAILED"], "error", config_id=caps.model_config_id
+                EVENT["ACP_CONFIG_OPTION_FAILED"], "error", kind="model"
             )
             log_event(
                 logger,
@@ -92,6 +98,7 @@ class OpenCodeSession(AcpSession):
                 session=short_id(self._session_id),
                 error=str(exc),
             )
+            self._record_diag(EVENT["MODEL_REASSERTED"], "error", kind="model", status="failed")
 
     async def submit_prompt(self, text: str) -> None:
         # OpenCode-specific: reassert the selected model through the authorized

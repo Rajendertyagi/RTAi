@@ -107,6 +107,8 @@ class AcpSession(AgentAdapter):
         # Per-session diagnostics recorder (safe, ring-buffered). Linked by the
         # session entry; None until then so recording is a no-op beforehand.
         self.diag: Any = None
+        # One-time guard so the safe model-option discovery event logs once.
+        self._model_option_discovered: bool = False
         # Tool call ids already announced via tool_start; used to distinguish
         # the first sighting from subsequent streaming/final updates.
         self._seen_tool_calls: set[str] = set()
@@ -197,6 +199,7 @@ class AcpSession(AgentAdapter):
             )
             log_event(logger, logging.INFO, "acp_initialized")
             self._capabilities.ingest_session_state(jsonable_model(session))
+            self._maybe_record_model_discovery()
             load_cap = getattr(init_response, "loadSession", None)
             self._load_session_cap = bool(load_cap) if load_cap is not None else None
             self._session_caps = self._discover_session_capabilities(init_response)
@@ -261,6 +264,7 @@ class AcpSession(AgentAdapter):
         caps = self._capabilities
         # Validate RTAI safety limits before any SDK interaction.
         validate_prompt_limits(content)
+        self._record_diag(EVENT["PROMPT_STARTED"], "info", session=short_id(self._session_id))
 
         # Check capability support for each block kind — reject entirely on
         # first unsupported kind rather than silently dropping or downgrading.
@@ -366,6 +370,7 @@ class AcpSession(AgentAdapter):
         await self._send({"type": "done"})
 
     async def cancel(self) -> None:
+        self._record_diag(EVENT["PROMPT_CANCELLED"], "info")
         if self._connection and self._session_id:
             log_event(
                 logger,
@@ -586,6 +591,7 @@ class AcpSession(AgentAdapter):
             options = dumped.get("configOptions") or dumped.get("options") or []
             if isinstance(options, list):
                 self._capabilities.ingest_config_options(options)
+                self._maybe_record_model_discovery()
         elif kind == "current_mode_update":
             mode_id = dumped.get("modeId")
             if isinstance(mode_id, str):
@@ -735,6 +741,7 @@ class AcpSession(AgentAdapter):
                     session_id=self._session_id, mode_id=value_id
                 )
                 caps.apply_selection_locally(kind, value_id)
+                self._record_diag(EVENT["CAPABILITY_SELECTION_UNAVAILABLE"], "warn", kind=kind)
                 return SelectionResult(
                     kind=kind, applied=True, message="Legacy set_session_mode accepted."
                 )
@@ -752,26 +759,64 @@ class AcpSession(AgentAdapter):
                     applied=False,
                     message=f"No {kind} config option was announced by the runtime.",
                 )
-            self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", config_id=config_id)
+            self._record_diag(EVENT["ACP_CONFIG_OPTION_SENT"], "info", kind=kind)
             try:
                 result = await self._connection.set_config_option(
                     session_id=self._session_id, config_id=config_id, value=value_id
                 )
-                self._record_diag(EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", config_id=config_id)
+                self._record_diag(EVENT["ACP_CONFIG_OPTION_CONFIRMED"], "info", kind=kind)
             except Exception:
-                self._record_diag(EVENT["ACP_CONFIG_OPTION_FAILED"], "error", config_id=config_id)
+                self._record_diag(EVENT["ACP_CONFIG_OPTION_FAILED"], "error", kind=kind)
                 raise
             dumped = jsonable_model(result)
-            if isinstance(dumped, dict):
-                options = dumped.get("configOptions")
+            options = dumped.get("configOptions") if isinstance(dumped, dict) else None
+            self._record_diag(EVENT["ACP_CONFIG_OPTION_ECHO"], "info", kind=kind)
+            if kind == "model":
+                # Authoritative-only model selection: the active model is updated
+                # exclusively from the echoed config options, and applied only if
+                # the echo reports the same config id with the requested value.
+                self._maybe_record_model_discovery()
+                confirmed = False
                 if isinstance(options, list):
-                    caps.ingest_config_options(options)
+                    summary = caps.ingest_config_options(options)
+                    confirmed = bool(summary.get("model_present")) and (
+                        caps.model_config_id == config_id
+                        and caps.selected_model == value_id
+                    )
+                if confirmed:
+                    self._record_diag(EVENT["MODEL_ECHO_MATCH"], "info", kind="model")
+                    self._record_diag(EVENT["MODEL_CONFIRMED"], "info", kind="model")
+                    return SelectionResult(
+                        kind=kind, applied=True,
+                        message="Runtime confirmed the selected model.",
+                    )
+                # Missing/malformed/other-id/other-value echo: keep the prior
+                # confirmed model; do NOT overwrite the badge.
+                self._record_diag(EVENT["MODEL_ECHO_MISMATCH"], "warn", kind="model")
+                return SelectionResult(
+                    kind=kind, applied=False,
+                    message=(
+                        "Runtime did not confirm the requested model; the "
+                        "previously confirmed model stays selected."
+                    ),
+                )
+            if isinstance(options, list):
+                caps.ingest_config_options(options)
             caps.apply_selection_locally(kind, value_id)
             return SelectionResult(
                 kind=kind, applied=True, message="Runtime accepted the selection."
             )
         except Exception as exc:
             return SelectionResult(kind=kind, applied=False, message=f"Selection failed: {exc}")
+
+    def _maybe_record_model_discovery(self) -> None:
+        """Record a safe, one-time model-option discovery event (category only)."""
+        if self._model_option_discovered:
+            return
+        category = self._capabilities.discovered_model_category
+        if category:
+            self._record_diag(EVENT["MODEL_OPTION_DISCOVERED"], "info", category=category)
+            self._model_option_discovered = True
 
     def _record_diag(self, event: str, level: str = "info", **fields: Any) -> None:
         """Record a safe diagnostic event if a recorder is linked (no-op otherwise)."""

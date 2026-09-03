@@ -30,6 +30,7 @@ from ..capabilities import (
 
 # Reserved ACP config-option categories (integration constants, not data).
 CATEGORY_MODEL = "model"
+CATEGORY_MODEL_CONFIG = "model_config"
 CATEGORY_THOUGHT_LEVEL = "thought_level"
 CATEGORY_MODE = "mode"
 
@@ -62,7 +63,7 @@ def _select_option(
     current = config_option.get("currentValue")
     if not isinstance(current, str):
         current = None
-    if category == CATEGORY_MODEL and entries:
+    if category in (CATEGORY_MODEL, CATEGORY_MODEL_CONFIG) and entries:
         models = [e for e in entries if isinstance(e, ModelDescriptor)]
         return models, None, None, current
     if category == CATEGORY_THOUGHT_LEVEL and entries:
@@ -86,7 +87,7 @@ def _value_to_descriptor(
         return None
     description = entry.get("description") or ""
     label = name if isinstance(name, str) else value
-    if category == CATEGORY_MODEL:
+    if category in (CATEGORY_MODEL, CATEGORY_MODEL_CONFIG):
         return ModelDescriptor(id=value, label=label)
     if category == CATEGORY_THOUGHT_LEVEL:
         return ThinkingOption(id=value, label=label)
@@ -108,6 +109,9 @@ class AcpCapabilityState:
         self.selected_thinking: str | None = None
         self.selected_agent: str | None = None
         self.model_config_id: str | None = None
+        # Category of the model-selection config option as announced by the
+        # runtime ("model" or "model_config"); safe enum literal only.
+        self.discovered_model_category: str | None = None
         self.mode_config_id: str | None = None
         self.thought_level_config_id: str | None = None
         # Attachment capabilities mapped from ACP InitializeResponse.
@@ -154,26 +158,34 @@ class AcpCapabilityState:
         # the provider explicitly disables them (which compliant agents won't).
         self.attachment_resource_links = True
 
-    def ingest_config_options(self, options: list[Any]) -> None:
+    def ingest_config_options(self, options: list[Any]) -> dict[str, Any]:
         """Replace affected sections from a complete config-options payload.
 
         A full echo always arrives after set_config_option and inside
         config_option_update notifications, so selection changes refresh every
         dependent slice - notably thought_level after a model change.
+
+        Returns a small safe summary (no model values/ids) so callers can tell
+        whether the echo contained a model-selection option.
         """
         models: list[ModelDescriptor] = []
         thinking: list[ThinkingOption] = []
         modes: list[ModeDescriptor] = []
+        model_present = False
         for option in options:
             if not isinstance(option, dict):
                 continue
             option_id = option.get("id")
+            category = option.get("category")
             new_models, new_thinking, new_modes, current = _select_option(option)
             if new_models is not None:
                 models = new_models
+                model_present = True
                 self.model_config_id = option_id if isinstance(option_id, str) else None
                 if current is not None:
                     self.selected_model = current
+                if category in (CATEGORY_MODEL, CATEGORY_MODEL_CONFIG):
+                    self.discovered_model_category = category
             elif new_thinking is not None:
                 thinking = new_thinking
                 self.thought_level_config_id = option_id if isinstance(option_id, str) else None
@@ -197,6 +209,7 @@ class AcpCapabilityState:
             )
         if modes:
             self.modes = CapabilitySection(items=tuple(modes))
+        return {"model_present": model_present}
 
     def _mode_section_available(self) -> bool:
         return self.modes.available
@@ -237,10 +250,16 @@ class AcpCapabilityState:
     # -- projection ---------------------------------------------------------
 
     def apply_selection_locally(self, kind: str, value: str) -> None:
-        """Provisional pre-ack view; authoritative echoes replace it later."""
+        """Provisional pre-ack view; authoritative echoes replace it later.
+
+        Model selection is intentionally NOT applied here: the active model is
+        updated only from an authoritative ACP config-options echo (see
+        AcpSession.select), so a requested model can never reach the badge
+        unless OpenCode confirmed it.
+        """
         if kind == "model":
-            self.selected_model = value
-        elif kind == "mode":
+            return
+        if kind == "mode":
             self.selected_mode = value
         elif kind == "thinking":
             self.selected_thinking = value
