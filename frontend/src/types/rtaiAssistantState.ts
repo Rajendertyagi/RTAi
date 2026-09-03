@@ -129,16 +129,24 @@ export type RtaiAssistantState = {
 
 // One safe diagnostic event. Only non-sensitive scalar fields are ever present
 // (timestamp, stable event name, level, short correlation id, safe counters).
+// JSON strictness (same rule as RtaiCapabilitiesState): every member is
+// non-optional and `undefined`-free, because RtaiDiagnosticEvent[] is projected
+// into AssistantTransport's external `state`, which must satisfy
+// assistant-stream's ReadonlyJSONValue — and `undefined` is not a JSON value.
+// "Absent" members are therefore represented as null instead of undefined.
 export type RtaiDiagnosticEvent = {
   ts: string;
   event: string;
   level: string;
-  // "client" = emitted by frontend instrumentation via the rtai.clientDiagnostic command and recorded server-side with origin:"client";
-  // "server" (or absent) = projected from the backend DiagnosticsRecorder.
+  // "client" = emitted by frontend instrumentation via the rtai.clientDiagnostic
+  // command and recorded server-side with origin:"client";
+  // "server" (or null / absent key in the projected JSON) = projected from the
+  // backend DiagnosticsRecorder. Null (never undefined) keeps this member
+  // assignable to ReadonlyJSONValue.
   // Lets the Diagnostics panel show one merged, honestly-sourced stream.
-  origin?: "server" | "client";
+  origin: "server" | "client" | null;
   // Only JSON-safe scalar fields are ever present (see backend
   // DiagnosticsRecorder); an open index keeps the varied safe fields while
   // staying assignable to assistant-stream's ReadonlyJSONValue.
-  [key: string]: string | number | boolean | null | undefined;
+  [key: string]: string | number | boolean | null;
 };

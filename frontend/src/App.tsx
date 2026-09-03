@@ -42,7 +42,7 @@ export function App() {
             onClick={() => setDiagOpen(true)}
             className="fixed bottom-3 right-3 z-50 rounded-md border border-border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow hover:bg-accent"
           >
-            Diagnostics
+            Logs
           </button>
         )}
         <DiagnosticsPanel open={diagOpen} onClose={() => setDiagOpen(false)} />
