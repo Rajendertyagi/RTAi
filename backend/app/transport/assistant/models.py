@@ -22,7 +22,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ...agents.prompt_content import PromptValidationError, parse_inline_data_url
 
@@ -168,6 +168,8 @@ RTAI_SELECT_COMMANDS: dict[str, str] = {
     "rtai.selectThinking": "thinking",
 }
 
+RTAI_CLIENT_DIAGNOSTIC_COMMAND = "rtai.clientDiagnostic"
+
 
 class RtaiRefreshCapabilitiesCommand(BaseModel):
     """Strict refresh-capabilities custom command."""
@@ -195,6 +197,49 @@ class RtaiSelectCommand(BaseModel):
         if v.strip() == "":
             raise ValueError("value must not be blank")
         return v
+
+
+class RtaiClientDiagnosticCommand(BaseModel):
+    """Strict client diagnostics custom command (single authoritative stream).
+
+    Frontend lifecycle moments are reported through this command over the existing
+    AssistantTransport command path. Only safe, bounded scalar metadata is accepted:
+    an event enum, an optional kind enum, and an optional option-length count.
+    Anything else (raw identifiers, session/option ids, prompt text, tool data,
+    file/path data, tokens, credentials, free-form detail) is rejected via
+    ``extra="forbid"`` and the Pydantic standard 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["rtai.clientDiagnostic"]
+    event: Literal[
+        "gate_ready",
+        "capability_command_sent",
+        "model_command_sent",
+        "permission_post_initiated",
+        "client_error",
+    ]
+    kind: Literal[
+        "refresh",
+        "agent",
+        "model",
+        "mode",
+        "thinking",
+        "transport",
+        "permission",
+    ] | None = None
+    optionLength: int | None = Field(default=None, ge=0, le=256)
+
+    @model_validator(mode="after")
+    def _enforce_option_length_scope(self) -> "RtaiClientDiagnosticCommand":
+        # optionLength is only meaningful for the permission POST-initiated event;
+        # reject it on every other event so no length/identifier leaks via it.
+        if self.optionLength is not None and self.event != "permission_post_initiated":
+            raise ValueError(
+                "optionLength is only allowed for permission_post_initiated"
+            )
+        return self
 
 
 def _validate_rtai_command(model: type[BaseModel], cmd: dict[str, Any], idx: int) -> None:
@@ -282,6 +327,22 @@ def prepare_validated_commands(
                 )
             _validate_rtai_command(RtaiSelectCommand, cmd, idx)
             prepared.append({"type": ctype, "value": cmd["value"]})
+            continue
+        elif ctype == RTAI_CLIENT_DIAGNOSTIC_COMMAND:
+            # Safe, non-mutating diagnostic ping. Strictly validated
+            # (extra="forbid", enum-only event/kind, bounded optionLength) and
+            # carried through the same command path as other rtai.* commands.
+            # Allowed at any position: it never affects the prompt, so it bypasses
+            # the add-message order policy that gates capability selections.
+            _validate_rtai_command(RtaiClientDiagnosticCommand, cmd, idx)
+            prepared.append(
+                {
+                    "type": RTAI_CLIENT_DIAGNOSTIC_COMMAND,
+                    "event": cmd["event"],
+                    "kind": cmd.get("kind"),
+                    "optionLength": cmd.get("optionLength"),
+                }
+            )
             continue
         else:
             raise HTTPException(

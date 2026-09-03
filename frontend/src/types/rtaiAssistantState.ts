@@ -133,6 +133,10 @@ export type RtaiDiagnosticEvent = {
   ts: string;
   event: string;
   level: string;
+  // "client" = emitted by frontend instrumentation via the rtai.clientDiagnostic command and recorded server-side with origin:"client";
+  // "server" (or absent) = projected from the backend DiagnosticsRecorder.
+  // Lets the Diagnostics panel show one merged, honestly-sourced stream.
+  origin?: "server" | "client";
   // Only JSON-safe scalar fields are ever present (see backend
   // DiagnosticsRecorder); an open index keeps the varied safe fields while
   // staying assignable to assistant-stream's ReadonlyJSONValue.

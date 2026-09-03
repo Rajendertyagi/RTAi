@@ -3,6 +3,7 @@
 import {
   AssistantRuntimeProvider,
   useAssistantTransportRuntime,
+  useAssistantTransportSendCommand,
   useAuiState,
   unstable_createMessageConverter,
   AuiConfig,
@@ -13,8 +14,11 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
+  useRef,
   useState,
   type ReactNode,
+  type MutableRefObject,
 } from "react";
 import type { ReadonlyJSONObject } from "assistant-stream/utils";
 import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
@@ -207,6 +211,18 @@ function TransportReadyGate({ children }: { children: ReactNode }) {
   // consumer behind this single boundary so they only render against the real
   // transport thread.
   const isLoading = useAuiState((s) => s.thread.isLoading);
+  const sendCommand = useAssistantTransportSendCommand();
+  const gateEmitted = useRef(false);
+  useEffect(() => {
+    if (!isLoading && !gateEmitted.current) {
+      gateEmitted.current = true;
+      // Real client event: the transport gate became ready and the main thread
+      // is mounted. Sent once via the rtai.clientDiagnostic command; the
+      // component-local ref guard prevents duplicate emission on rerender or
+      // StrictMode replay. Recorded server-side with origin:"client".
+      sendCommand({ type: "rtai.clientDiagnostic", event: "gate_ready" } as Parameters<typeof sendCommand>[0]);
+    }
+  }, [isLoading, sendCommand]);
   if (isLoading) {
     return (
       <div className="flex h-dvh w-full items-center justify-center bg-background text-sm text-muted-foreground">
@@ -224,6 +240,23 @@ function TransportReadyGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+// Bridges the official useAssistantTransportSendCommand() hook (only callable inside the
+// AssistantRuntimeProvider tree) to sendCommandRef, which the error handler (defined in
+// RtaiAssistantRuntime's initializer, outside the provider context) reads. Renders nothing;
+// stores the hook's returned function into the ref via an effect. No store/context/polling/
+// WebSocket/state mutation; never sends during render; never logs error text or payloads.
+function SendCommandBridge({
+  sendCommandRef,
+}: {
+  sendCommandRef: MutableRefObject<((cmd: unknown) => void) | null>;
+}) {
+  const sendCommand = useAssistantTransportSendCommand();
+  useEffect(() => {
+    sendCommandRef.current = sendCommand as unknown as (cmd: unknown) => void;
+  }, [sendCommand, sendCommandRef]);
+  return null;
+}
+
 function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
   // Fresh per mount: initialState carries NO sessionId, so the backend generates a new
   // session on the first /assistant POST after a remount. Thereafter the sessionId
@@ -234,6 +267,12 @@ function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
     messages: [],
     status: "ready",
   };
+
+  // Holds the official sendCommand function (from useAssistantTransportSendCommand,
+  // wired by SendCommandBridge rendered inside AssistantRuntimeProvider) so the
+  // error handler (defined in this initializer, outside the provider context) can
+  // emit diagnostics via the same rtai.clientDiagnostic command path.
+  const sendCommandRef = useRef<((cmd: unknown) => void) | null>(null);
 
   const runtime = useAssistantTransportRuntime<RtaiAssistantState>({
     api: "/assistant",
@@ -246,7 +285,23 @@ function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
     // conversion/send/remove to the official SimpleImageAttachmentAdapter. No second store.
     adapters: { attachments: new RtaiImageAttachmentAdapter() },
     onError: (error, { updateState }) => {
-      // Safe error only, via official updateState callback
+      // Safe, payload-free client error signal via the official rtai.clientDiagnostic
+      // command path. The send function is supplied by SendCommandBridge (rendered
+      // inside AssistantRuntimeProvider) into sendCommandRef, because this initializer
+      // runs outside the provider context where the hook cannot be called. kind only;
+      // no error message is transmitted. Best-effort: no-op if the bridge has not yet
+      // populated the ref.
+      try {
+        sendCommandRef.current?.(
+          {
+            type: "rtai.clientDiagnostic",
+            event: "client_error",
+            kind: "transport",
+          }
+        );
+      } catch {
+        /* diagnostics are best-effort */
+      }
       updateState((s) => ({
         ...s,
         status: "error" as const,
@@ -263,6 +318,7 @@ function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={RTAI_CONFIG}>
+      <SendCommandBridge sendCommandRef={sendCommandRef} />
       <TransportReadyGate>{children}</TransportReadyGate>
     </AssistantRuntimeProvider>
   );

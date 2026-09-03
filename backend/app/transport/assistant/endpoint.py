@@ -31,6 +31,7 @@ from ...agents.prompt_content import (
     submit_prompt_blocks,
 )
 from ...logging_config import log_event, short_id
+from ...diagnostics import EVENT
 from .acp_state_projector import (
     _EXPIRED_REASON,
     AcpStateProjector,
@@ -42,6 +43,7 @@ from .acp_state_projector import (
 from .models import (
     RTAI_REFRESH_COMMAND,
     RTAI_SELECT_COMMANDS,
+    RTAI_CLIENT_DIAGNOSTIC_COMMAND,
     AssistantTransportRequest,
     _find_parent_index,
     ensure_state_shape,
@@ -56,6 +58,61 @@ from .session_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _diag_record(adapter, event, level="info", **fields):
+    """Record a safe diagnostic on the session recorder (no-op if unavailable)."""
+    rec = getattr(adapter, "diag", None)
+    if rec is not None:
+        rec.record(event, level, **fields)
+
+
+def _diag_project(controller, adapter):
+    """Project the safe diagnostics ring buffer into RunController external state."""
+    rec = getattr(adapter, "diag", None)
+    if rec is None:
+        return
+    try:
+        controller.state["rtaiDiagnostics"] = rec.snapshot()
+    except Exception:
+        pass
+
+
+# Server-authored event names for validated client diagnostics. The frontend emits
+# lifecycle moments through the rtai.clientDiagnostic command; the backend records
+# them under a stable `client.<event>` name so they join the SAME Diagnostics
+# stream as server events (no second store, no merge at render time).
+_CLIENT_DIAG_EVENT = {
+    "gate_ready": EVENT["CLIENT_GATE_READY"],
+    "capability_command_sent": EVENT["CLIENT_CAPABILITY_COMMAND_SENT"],
+    "model_command_sent": EVENT["CLIENT_MODEL_COMMAND_SENT"],
+    "permission_post_initiated": EVENT["CLIENT_PERMISSION_POST_INITIATED"],
+    "client_error": EVENT["CLIENT_ERROR"],
+}
+
+
+def _record_client_diagnostic(controller, adapter, cmd):
+    """Record a validated client diagnostic into the per-session recorder.
+
+    Stored under a stable server-authored name (client.<event>) with origin:"client"
+    so it is honestly attributable inside the single Diagnostics stream the panel
+    renders. Only the validated enum/scalar values are carried; the recorder's
+    sanitizer drops sensitive keys and bounds the ring to 200 events. Projection
+    into controller.state["rtaiDiagnostics"] happens through the normal path.
+    """
+    name = _CLIENT_DIAG_EVENT.get(cmd.get("event"))
+    if name is None:
+        return
+    fields: dict[str, Any] = {"origin": "client"}
+    kind = cmd.get("kind")
+    if isinstance(kind, str) and kind:
+        fields["kind"] = kind
+    opt = cmd.get("optionLength")
+    if isinstance(opt, int):
+        fields["optionLength"] = opt
+    _diag_record(adapter, name, "info", **fields)
+    _diag_project(controller, adapter)
+
 
 router = APIRouter()
 
@@ -93,6 +150,13 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
     initial_state, session_key, _is_new = ensure_state_shape(
         parsed.state, thread_id=parsed.threadId
     )
+    if not _is_new:
+        # Reused session: record the safe lifecycle event against its recorder.
+        with contextlib.suppress(Exception):
+            _entry = get_entry_any(session_key)
+            _diag = getattr(_entry, "diagnostics", None)
+            if _diag is not None:
+                _diag.record(EVENT["SESSION_REUSED"], "info", session=short_id(session_key))
 
     # === Pre-stream validation (before DataStreamResponse) ===
     # Simulate commands against a temporary message list to validate parentId,
@@ -124,6 +188,10 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
 
         entry_any = get_entry_any(session_key)
         if entry_any is not None and entry_any.state in ("closing", "close_failed"):
+            with contextlib.suppress(Exception):
+                _diag = getattr(entry_any, "diagnostics", None)
+                if _diag is not None:
+                    _diag.record(EVENT["TRANSPORT_UNAVAILABLE"], "warn", session=short_id(session_key))
             raise HTTPException(
                 status_code=409, detail={"error": "session_closing", "sessionId": session_key}
             )
@@ -201,6 +269,10 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
             state=initial_state,
             config=parsed.config,
         )
+        # Transport has obtained a usable adapter; the frontend gate can open.
+        _diag_record(adapter, EVENT["TRANSPORT_READY"], "info")
+        _diag_record(adapter, EVENT["ADAPTER_READY"], "info")
+        _diag_project(controller, adapter)
         # Update idle activity when the entry is obtained for a request
         touch_session(session_key)
         entry = get_entry(session_key)
@@ -231,6 +303,8 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                 ctype = str(cmd.get("type", ""))
                 if ctype == "add-message":
                     has_add_message = True
+                    # The frontend submitted a prompt command over the official queue.
+                    _diag_record(adapter, EVENT["PROMPT_COMMAND_RECEIVED"], "info")
                     message = cmd["message"]  # validated, stable id already present
                     parent_id = cmd.get("parentId")
                     if isinstance(parent_id, str) and parent_id:
@@ -315,6 +389,7 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
             if not has_add_message or not raw_blocks:
                 # Capability-only batch (or empty message): finalize ready with the
                 # projected capability state already written to controller.state.
+                _diag_project(controller, adapter)
                 _set_status(controller, "ready")
                 controller.flush()
                 if logger.isEnabledFor(logging.DEBUG):
@@ -329,6 +404,7 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                 return
 
             _ensure_assistant_message(controller)
+            _diag_project(controller, adapter)
             _set_status(controller, "running")
             controller.flush()
             if logger.isEnabledFor(logging.DEBUG):
@@ -427,7 +503,11 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                     with contextlib.suppress(asyncio.CancelledError):
                         await cancel_task
 
-                controller.flush()
+                try:
+                    controller.flush()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        _diag_record(adapter, EVENT["STATE_FLUSH_FAILED"], "error")
             except asyncio.CancelledError:
                 # Run callback itself was cancelled (client disconnect)
                 cancelled = True
@@ -516,6 +596,11 @@ async def _apply_capability_command(
     not leak the submitted payload.
     """
     ctype = cmd.get("type")
+    if ctype == RTAI_CLIENT_DIAGNOSTIC_COMMAND:
+        # Validated client diagnostic: record into the same per-session recorder
+        # and project immediately. Non-mutating; never affects selection/prompt.
+        _record_client_diagnostic(controller, adapter, cmd)
+        return
     log_event(
         logger,
         logging.DEBUG,
@@ -524,8 +609,8 @@ async def _apply_capability_command(
         type=str(cmd.get("type")),
     )
     if ctype == RTAI_REFRESH_COMMAND:
-        # --- DIAGNOSTIC (gated by RTAI_LOG_LEVEL=DEBUG): adapter snapshot result ---
-        # Logs only success/failure + exception class (never snapshot contents/ids).
+        # The frontend issued a capability refresh over the official command queue.
+        _diag_record(adapter, EVENT["TRANSPORT_COMMAND_RECEIVED"], "info", kind="refresh")
         try:
             snapshot = adapter.capability_snapshot()
         except Exception as exc:
@@ -537,20 +622,22 @@ async def _apply_capability_command(
                 success=False,
                 error=type(exc).__name__,
             )
-            raise
-        log_event(
-            logger,
-            logging.DEBUG,
-            "assistant_capability_snapshot",
-            session=short_id(session_key),
-            success=True,
-        )
+            # Controlled failure: do NOT project a capability state and do NOT raise,
+            # so the command completes and the frontend's one-shot bootstrap detects
+            # the dropped refresh and offers Retry (never a permanent spinner). The
+            # reason is recorded safely in diagnostics for the Diagnostics panel.
+            _diag_record(adapter, EVENT["CAPABILITY_REFRESH_FAILED"], "error", reason=type(exc).__name__)
+            _diag_project(controller, adapter)
+            return
+        _diag_record(adapter, EVENT["CAPABILITY_SNAPSHOT_RECEIVED"], "info")
         project_capabilities(controller, snapshot, recorder=getattr(adapter, "diag", None))
+        _diag_project(controller, adapter)
         return
     kind = RTAI_SELECT_COMMANDS.get(ctype)
     if kind is None:
         return
     value = cmd.get("value")
+    _diag_record(adapter, EVENT["TRANSPORT_COMMAND_RECEIVED"], "info", kind=kind)
     try:
         result = await adapter.select(kind, value)
     except Exception as exc:
@@ -563,12 +650,17 @@ async def _apply_capability_command(
             error=type(exc).__name__,
         )
         set_capability_error(controller, kind, "Selection could not be applied.")
+        _diag_record(adapter, EVENT["TRANSPORT_COMMAND_ERROR"], "warn", kind=kind)
+        _diag_project(controller, adapter)
         return
     if result.applied:
         project_capabilities(controller, adapter.capability_snapshot(), recorder=getattr(adapter, "diag", None))
     else:
         # Preserve prior server-selected value; expose a safe, payload-free error.
         set_capability_error(controller, kind, "Selection could not be applied.")
+        _diag_record(adapter, EVENT["TRANSPORT_COMMAND_ERROR"], "warn", kind=kind)
+    _diag_project(controller, adapter)
+    return
 
 
 class PermissionResponseRequest(BaseModel):
@@ -627,6 +719,9 @@ async def respond_assistant_permission(
 
     # Read-only session lookup; do NOT acquire the per-turn lock.
     entry = get_entry_any(sid)
+    if entry is not None and getattr(entry, "diagnostics", None) is not None:
+        with contextlib.suppress(Exception):
+            entry.diagnostics.record(EVENT["PERMISSION_RESPONSE_RECEIVED"], "info", permission=short_id(pid))
     if entry is None:
         raise HTTPException(status_code=404, detail={"error": "unknown_session"})
     if entry.state in ("closing", "closed", "close_failed"):

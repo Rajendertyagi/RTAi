@@ -33,6 +33,11 @@ export function DiagnosticsPanel({
   open: boolean;
   onClose: () => void;
 }) {
+  // Single source of truth: the safe diagnostics the backend projects through
+  // the existing AssistantTransport external state (rtaiDiagnostics). Client events
+  // arrive via the rtai.clientDiagnostic command and are recorded server-side with
+  // origin:"client", so they are already present in this one stream - there is no
+  // second client store and no merge at render time.
   const events = useRtaiDiagnostics();
   const [level, setLevel] = useState<string>("all");
   const [corr, setCorr] = useState("");
@@ -117,6 +122,11 @@ export function DiagnosticsPanel({
                     {e.level}
                   </span>
                   <span className="font-semibold">{e.event}</span>
+                  {e.origin === "client" && (
+                    <span className="ml-1 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                      client
+                    </span>
+                  )}
                 </div>
                 <div className="text-muted-foreground">
                   {Object.entries(e)

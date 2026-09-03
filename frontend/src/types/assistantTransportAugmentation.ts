@@ -35,6 +35,24 @@ declare module "@assistant-ui/core" {
       rtaiSelectModel: { type: "rtai.selectModel"; value: string };
       rtaiSelectMode: { type: "rtai.selectMode"; value: string };
       rtaiSelectThinking: { type: "rtai.selectThinking"; value: string };
+      rtaiClientDiagnostic: {
+        type: "rtai.clientDiagnostic";
+        event:
+          | "gate_ready"
+          | "capability_command_sent"
+          | "model_command_sent"
+          | "permission_post_initiated"
+          | "client_error";
+        kind?:
+          | "refresh"
+          | "agent"
+          | "model"
+          | "mode"
+          | "thinking"
+          | "transport"
+          | "permission";
+        optionLength?: number;
+      };
     }
     interface ExternalState {
       // Full RTAI external state. Every field actually exposed through the

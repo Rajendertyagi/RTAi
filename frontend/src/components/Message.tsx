@@ -32,6 +32,7 @@ import { MarkdownText } from "./assistant-ui/markdown-text";
 import { ErrorState } from "./assistant-ui/elements/error-state";
 import { StoppedRun } from "./assistant-ui/elements/stopped-run";
 import { ThinkingIndicator } from "./assistant-ui/elements/thinking-indicator";
+import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
 import { useRtaiCapabilities } from "@/hooks/useRtaiAssistantState";
 
 // Assistant messages carry two extra, backend-stamped timing fields (see
@@ -196,6 +197,8 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
     ),
   );
 
+  const isRunning = useAuiState((s) => s.message.status?.type === "running");
+
   if (message.role === "user") {
     return (
       <MessagePrimitive.Root className="flex gap-3 py-2 flex-row-reverse">
@@ -217,6 +220,7 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
           <div className="bg-card border border-border rounded-xl p-2.5">
             <MessagePrimitive.GroupedParts
               groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}
+              indicator="never"
             >
               {({ part, children }) => {
                 if (part.type !== "group-reasoning") return null;
@@ -240,8 +244,17 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
           <div className="bg-card border border-border rounded-xl p-2.5">
             <MessagePrimitive.GroupedParts
               groupBy={groupPartByType({ "tool-call": ["group-tool"] })}
+              indicator="never"
             >
               {({ part, children }) => {
+                // Active ToolCall renderer: every tool-call leaf routes through
+                // RtaiToolFallback, which preserves the official ToolFallback for
+                // ordinary calls and bridges RTAI approval-bearing calls to the
+                // concurrent permission REST endpoint. Nothing else renders a tool
+                // UI, so nothing is rendered twice.
+                if (part.type === "tool-call") {
+                  return <RtaiToolFallback {...part} />;
+                }
                 if (part.type !== "group-tool") return null;
                 return (
                   <ToolGroupRoot variant="ghost">
@@ -260,9 +273,12 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
         {/* Response card — final answer text, images, files. Reasoning and
             tool-calls are owned by their own cards above, so they render null here
             to avoid duplication. */}
-        {hasResponse && (
+        {(hasResponse || isRunning) && (
           <div className="bg-card border border-border rounded-xl p-2.5">
-            <MessagePrimitive.GroupedParts groupBy={groupPartByType({})}>
+            <MessagePrimitive.GroupedParts
+              groupBy={groupPartByType({})}
+              indicator="always"
+            >
               {({ part }) => {
                 switch (part.type) {
                   case "text":
@@ -271,10 +287,11 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                     return <Image {...part} />;
                   case "file":
                     return <File {...part} />;
+                  case "indicator":
+                    return <MessageThinking />;
                   case "group-tool":
                   case "tool-call":
                   case "reasoning":
-                  case "indicator":
                     return null;
                   default:
                     return null;
@@ -295,20 +312,6 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
           }
         >
           <MessageStoppedRun />
-        </AuiIf>
-        <AuiIf
-          condition={(s) =>
-            s.message.role === "assistant" &&
-            s.message.status?.type === "running" &&
-            !s.message.parts.some(
-              (p) =>
-                p.type === "text" ||
-                p.type === "reasoning" ||
-                p.type === "tool-call",
-            )
-          }
-        >
-          <MessageThinking />
         </AuiIf>
 
         {/* Response footer: model · live/elapsed time · date (left); official

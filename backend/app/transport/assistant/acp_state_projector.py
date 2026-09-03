@@ -164,7 +164,7 @@ def _set_status(controller: RunController, status: str, *, error: str | None = N
                     controller.state["error"] = ""  # type: ignore[index]
             except KeyError:
                 pass
-        except Exception:
+    except Exception:
             try:
                 if controller.state is None:
                     controller.state = {"messages": [], "status": status}  # type: ignore[assignment]
@@ -512,7 +512,7 @@ def set_capability_error(controller: RunController, kind: str, message: str) -> 
             return
         caps = state.get("rtaiCapabilities")
         if isinstance(caps, dict):
-            caps["error"] = {"kind": kind, "message": message}
+            caps["error"] = {"reason_code": kind, "reason_message": message}
         else:
             state["rtaiCapabilities"] = {
                 "initialized": True,
@@ -522,7 +522,7 @@ def set_capability_error(controller: RunController, kind: str, message: str) -> 
                 "modes": None,
                 "thinkingOptions": None,
                 "selected": {},
-                "error": {"kind": kind, "message": message},
+                "error": {"reason_code": kind, "reason_message": message},
             }
     except Exception:
         pass
@@ -641,6 +641,38 @@ class AcpStateProjector:
         except Exception:
             return
 
+    def _attach_approval(self, part, meta, permission_id):
+        if not isinstance(part, dict):
+            return
+        existing = part.get("approval")
+        if isinstance(existing, dict) and existing.get("approved") is not None:
+            return
+        approval = {"id": permission_id, "options": meta["options"]}
+        if not meta["options"]:
+            approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
+        part["approval"] = approval
+    def _attach_pending_permission(self, parts, idx, tool_call_id):
+        registry = self.permission_registry
+        if registry is None or not isinstance(parts, list) or idx < 0 or idx >= len(parts):
+            return
+        perm = registry.get_by_tool_call_id(tool_call_id)
+        if perm is None or perm.resolution is not None:
+            return
+        part = parts[idx]
+        if not isinstance(part, dict):
+            return
+        existing = part.get("approval")
+        if isinstance(existing, dict) and existing.get("approved") is not None:
+            return
+        # Reconstruct minimal approval options (id + kind) from the registry's
+        # stored option kinds; labels/descriptions are not retained in the
+        # registry but id + kind is sufficient for the single REST POST path.
+        options = [{"id": oid, "kind": okind} for oid, okind in perm.option_kinds.items()]
+        approval = {"id": perm.permission_id, "options": options}
+        if not options:
+            approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
+        part["approval"] = approval
+        self._record_diag(EVENT["PERMISSION_CORRELATED"], "info", permission=short_id(perm.permission_id), tool=short_id(tool_call_id))
     def _record_diag(self, event: str, level: str = "info", **fields: Any) -> None:
         """Record a safe diagnostic event if a recorder is linked (no-op otherwise)."""
         rec = self.diagnostics
@@ -657,7 +689,8 @@ class AcpStateProjector:
                 return
             self.controller.state["rtaiDiagnostics"] = rec.snapshot()
         except Exception:
-            pass
+            with contextlib.suppress(Exception):
+                self._record_diag(EVENT["STATE_PROJECTION_FAILED"], "error")
 
     async def handle(self, event: dict[str, Any]) -> None:
         if not isinstance(event, dict):
@@ -670,6 +703,7 @@ class AcpStateProjector:
             "tool_start",
         }:
             self._first_update_seen = True
+            self._record_diag(EVENT["FIRST_STREAM_EVENT"], "info", kind=str(etype))
             log_event(
                 logger,
                 logging.DEBUG,
@@ -681,6 +715,7 @@ class AcpStateProjector:
             part_id = event.get("part_id")
             part_type = event.get("part_type") or event.get("kind") or "text"
             if isinstance(part_id, str) and part_id:
+                self._record_diag(EVENT["PART_START"], "debug", kind=part_type or "text")
                 kind = "reasoning" if part_type == "reasoning" else "text"
                 self._part_kind_by_id[part_id] = kind
                 _ensure_assistant_message(self.controller)
@@ -697,15 +732,18 @@ class AcpStateProjector:
                 pt = event.get("part_type")
                 if pt == "reasoning":
                     kind = "reasoning"
+            self._record_diag(EVENT["PART_DELTA"], "debug", kind=kind)
             _append_text_to_assistant(self.controller, text, kind=kind)
             return
         if etype == "part_done":
             part_id = event.get("part_id")
+            self._record_diag(EVENT["PART_DONE"], "debug")
             if isinstance(part_id, str):
                 self._part_kind_by_id.pop(part_id, None)
             return
         if etype == "tool_start":
-            # Map ACP tool_start into one official tool-call part
+            # Map ACP tool_start into one official tool-call part. The correlation
+            # key is the EXACT ACP tool call id ONLY; we never invent a fallback id.
             tool_call_id = event.get("tool_call_id")
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 tool_call_id = event.get("toolCallId")
@@ -714,16 +752,17 @@ class AcpStateProjector:
             self._record_diag(EVENT["TOOL_START"], "info", tool=short_id(tool_call_id))
             tool_name = _derive_tool_name(event)
             args, args_text = _derive_tool_args(event)
-            idx = _ensure_assistant_message(self.controller)
             try:
+                idx = _ensure_assistant_message(self.controller)
                 state = self.controller.state
                 if state is None:
                     return
                 messages = state["messages"]  # type: ignore[index]
                 parts = messages[idx]["parts"]  # type: ignore[index]
-                # Append once to active assistant message; correlate later by toolCallId
-                # Do not create duplicate if already exists (idempotent)
-                if _find_tool_part_index(parts, tool_call_id) is None:
+                # Idempotent: never create a duplicate tool-call part for the same
+                # exact tool call id.
+                tool_idx = _find_tool_part_index(parts, tool_call_id)
+                if tool_idx is None:
                     tool_part: dict[str, Any] = {
                         "type": "tool-call",
                         "toolCallId": tool_call_id,
@@ -732,6 +771,12 @@ class AcpStateProjector:
                         "argsText": args_text,
                     }
                     parts.append(tool_part)  # type: ignore[attr-defined]
+                    tool_idx = len(parts) - 1
+                # Merge any pending permission keyed by this exact tool call id
+                # (permission-before-tool-start safe hand-off: exactly one approval
+                # card per permission id, attached to the real tool, never to an
+                # arbitrary or most-recent tool part).
+                self._attach_pending_permission(parts, tool_idx, tool_call_id)
             except Exception:
                 pass
             return
@@ -742,6 +787,7 @@ class AcpStateProjector:
                 tool_call_id = event.get("toolCallId")
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 return
+            self._record_diag(EVENT["TOOL_UPDATE"], "info", tool=short_id(tool_call_id))
             # Update official mutable fields only if meaningful
             # For tool_update, ACP may contain updated args or content; we handle args only
             raw = event.get("raw_input")
@@ -832,6 +878,7 @@ class AcpStateProjector:
                     if is_error:
                         tool_part["isError"] = True
                     parts.append(tool_part)  # type: ignore[attr-defined]
+                    tool_idx = len(parts) - 1
                 else:
                     part = parts[tool_idx]  # type: ignore[index]
                     part["result"] = result  # type: ignore[index]
@@ -851,81 +898,81 @@ class AcpStateProjector:
                 pass
             return
         if etype == "permission_request":
+            # Extract ONLY via the official ACP field contract. A malformed event
+            # (missing permission_request_id or the exact tool call id) yields None
+            # and must NOT spawn any actionable approval card.
             meta = _permission_meta_from_event(event)
             if meta is None:
+                # Honest, non-actionable protocol-error state. It is projected via
+                # diagnostics only (the bounded rtaiDiagnostics surface); no approval
+                # is attached to any tool and no fallback id is invented.
+                self._record_diag(EVENT["PERMISSION_PROTOCOL_ERROR"], "error", reason="invalid_event")
                 return
-            # Correlation key is the EXACT ACP tool call id ONLY. We never fall
-            # back to a "last tool call" or to the most-recent unmatched tool
-            # part: those are unsafe under concurrent/interleaved tool calls and
-            # previously spawned duplicate approval cards. If ACP provided no
-            # usable tool call id, derive a PERMISSION-scoped id (clearly not a
-            # tool id) so exactly one safe card is rendered.
-            tool_call_id = meta["tool_call_id"]
-            if not isinstance(tool_call_id, str) or not tool_call_id:
-                tool_call_id = f"perm-{meta['permission_id']}"
             permission_id = meta["permission_id"]
-            idx = _ensure_assistant_message(self.controller)
+            tool_call_id = meta["tool_call_id"]
+            self._record_diag(
+                EVENT["PERMISSION_RECEIVED"],
+                "info",
+                permission=short_id(permission_id),
+                tool=short_id(tool_call_id),
+                options=len(meta["options"]),
+            )
+            unsupported = meta.get("unsupported_kinds") or []
+            if unsupported:
+                # Unknown option kinds: never selectable, never assigned
+                # approved true/false. Log only short ids + kind, no payload.
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "assistant_permission_option_unsupported",
+                    session=short_id(self.session_key),
+                    permission=short_id(permission_id),
+                    kinds=",".join(unsupported)[:64],
+                )
             try:
                 state = self.controller.state
                 if state is None:
                     return
                 messages = state["messages"]
+                if not isinstance(messages, list) or not messages:
+                    return
+                idx = len(messages) - 1
                 parts = messages[idx]["parts"]
-                tool_idx = _find_tool_part_index(parts, tool_call_id)
-                if tool_idx is None:
-                    # No existing part for this exact tool call id. Enforce exactly
-                    # ONE approval part per active permission id: if a part already
-                    # carries this exact permission (idempotent re-delivery), reuse
-                    # it; otherwise create exactly ONE new part keyed by the real
-                    # tool call id. We never match a permission to an arbitrary or
-                    # most-recent tool part.
-                    dup_idx = _find_approval_part_index(parts, permission_id)
-                    if dup_idx is not None:
-                        tool_idx = dup_idx
-                    else:
-                        tool_name = _derive_tool_name(event)
-                        args, args_text = _derive_tool_args(event)
-                        tool_part: dict[str, Any] = {
-                            "type": "tool-call",
-                            "toolCallId": tool_call_id,
-                            "toolName": tool_name,
-                            "args": args,
-                            "argsText": args_text,
-                        }
-                        parts.append(tool_part)  # type: ignore[attr-defined]
-                        tool_idx = len(parts) - 1
-                part = parts[tool_idx]
-                unsupported = meta.get("unsupported_kinds") or []
-                if unsupported:
-                    # Unknown option kinds: never selectable, never assigned
-                    # approved true/false. Log only short ids + kind, no payload.
-                    log_event(
-                        logger,
-                        logging.WARNING,
-                        "assistant_permission_option_unsupported",
-                        session=short_id(self.session_key),
-                        permission=short_id(permission_id),
-                        kinds=",".join(unsupported)[:64],
-                    )
-                # Attach the official approval so Assistant UI derives a
-                # requires-action state and auto-expands the single card. Do not
-                # overwrite an already-resolved approval (approved is set).
-                existing = part.get("approval") if isinstance(part, dict) else None
-                if not isinstance(existing, dict) or existing.get("approved") is None:
-                    approval = {
-                        "id": permission_id,
-                        "options": meta["options"],
-                    }
-                    if not meta["options"]:
-                        approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
-                    part["approval"] = approval
+                # Re-delivery guard: if an approval for this exact permission id is
+                # already attached, this is an idempotent re-emit. Record it and stop
+                # (exactly one approval card per permission id).
+                if _find_approval_part_index(parts, permission_id) is not None:
                     self._record_diag(
-                        EVENT["PERMISSION_ATTACHED"],
+                        EVENT["PERMISSION_REDELIVERED"],
                         "info",
                         permission=short_id(permission_id),
                         tool=short_id(tool_call_id),
-                        options=len(meta["options"]),
                     )
+                    return
+                # Correlate ONLY with the exact ACP tool call id. If the matching
+                # real tool part has not arrived yet (permission-before-tool-start),
+                # retain the pending record (already in the session registry via
+                # dispatch) and merge when the exact tool_start arrives. We never
+                # attach an approval to an arbitrary/most-recent tool part and never
+                # invent a fallback tool call id.
+                tool_idx = _find_tool_part_index(parts, tool_call_id)
+                if tool_idx is None:
+                    return
+                part = parts[tool_idx]
+                if not isinstance(part, dict):
+                    return
+                # Do not overwrite an already-resolved approval (approved is set).
+                existing = part.get("approval")
+                if isinstance(existing, dict) and existing.get("approved") is not None:
+                    return
+                self._attach_approval(part, meta, permission_id)
+                self._record_diag(
+                    EVENT["PERMISSION_ATTACHED"],
+                    "info",
+                    permission=short_id(permission_id),
+                    tool=short_id(tool_call_id),
+                    options=len(meta["options"]),
+                )
             except Exception:
                 pass
             return
@@ -934,7 +981,10 @@ class AcpStateProjector:
             self._record_diag(EVENT["STATE_FLUSHED"], "debug")
             self._record_diag(EVENT["STREAM_COMPLETED"], "info")
             _set_status(self.controller, "complete")
-            self.controller.flush()
+            try:
+                self.controller.flush()
+            except Exception:
+                self._record_diag(EVENT["STATE_FLUSH_FAILED"], "error")
             return
         if etype == "error":
             self._record_diag(EVENT["STREAM_FAILED"], "error")

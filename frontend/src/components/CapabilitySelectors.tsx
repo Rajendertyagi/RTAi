@@ -258,11 +258,15 @@ export function CapabilityControls() {
     requestedRef.current = true;
     try {
       RTAI_DIAG("refresh-queued", { corr, reason: "bootstrap-mount" });
+      // Real client event: capability refresh command is about to be sent.
+      sendCommand({ type: "rtai.clientDiagnostic", event: "capability_command_sent", kind: "refresh" } as Parameters<typeof sendCommand>[0]);
       sendCommand({ type: "rtai.refreshCapabilities" } as Parameters<typeof sendCommand>[0]);
       setFailed(false);
     } catch {
       requestedRef.current = false; // allow a retry
       setFailed(true);
+      // Safe, payload-free client error signal (kind only).
+      sendCommand({ type: "rtai.clientDiagnostic", event: "client_error", kind: "refresh" } as Parameters<typeof sendCommand>[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caps, refreshPending, sendCommand, retryNonce]);
@@ -285,7 +289,19 @@ export function CapabilityControls() {
     // rtai.* commands are declared in assistantTransportAugmentation.ts
     // (Assistant.Commands augmentation), so a single precise cast to the exact
     // command parameter type is sufficient — no `as unknown as` / wide cast.
-    sendCommand({ type: COMMAND_BY_KIND[kind], value } as Parameters<typeof sendCommand>[0]);
+    try {
+      if (kind === "model") {
+        // Real client event: model selection command is about to be sent.
+        sendCommand({ type: "rtai.clientDiagnostic", event: "model_command_sent", kind: "model" } as Parameters<typeof sendCommand>[0]);
+      } else {
+        // Real client event: capability selection command is about to be sent.
+        sendCommand({ type: "rtai.clientDiagnostic", event: "capability_command_sent", kind } as Parameters<typeof sendCommand>[0]);
+      }
+      sendCommand({ type: COMMAND_BY_KIND[kind], value } as Parameters<typeof sendCommand>[0]);
+    } catch {
+      // Safe, payload-free client error signal (kind only).
+      sendCommand({ type: "rtai.clientDiagnostic", event: "client_error", kind } as Parameters<typeof sendCommand>[0]);
+    }
   };
 
   // Agent: tri-state — available with items → dropdown, available empty → disabled, null → unsupported hidden

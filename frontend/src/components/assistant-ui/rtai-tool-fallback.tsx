@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useAui,
   useAuiState,
+  useAssistantTransportSendCommand,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { useRtaiSessionId } from "@/hooks/useRtaiAssistantState";
@@ -53,6 +54,7 @@ export function RtaiToolFallback(props: ToolCallMessagePartProps) {
   const sessionId = useRtaiSessionId();
   const aui = useAui();
   const isRunning = useAuiState((s) => s.thread.isRunning);
+  const sendCommand = useAssistantTransportSendCommand();
 
   const approval = props.approval;
   const options = approval?.options ?? [];
@@ -111,6 +113,14 @@ export function RtaiToolFallback(props: ToolCallMessagePartProps) {
         sessionId,
       )}/permissions/${encodeURIComponent(approvalId)}`;
 
+      // Real client event: the permission-response POST is being initiated.
+      // Sent via the rtai.clientDiagnostic command with only the option length
+      // (no option/approval/session id, no message).
+      sendCommand({
+        type: "rtai.clientDiagnostic",
+        event: "permission_post_initiated",
+        optionLength: optionId ? optionId.length : 0,
+      } as Parameters<typeof sendCommand>[0]);
       fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

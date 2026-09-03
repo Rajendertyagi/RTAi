@@ -23,7 +23,7 @@ from ...agents.factory import AgentAdapterFactory
 from ...core.protocol import resolve_project_path
 from ...logging_config import log_event, short_id
 from .acp_state_projector import _permission_meta_from_event
-from ...diagnostics import DiagnosticsRecorder
+from ...diagnostics import EVENT, DiagnosticsRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -460,6 +460,9 @@ async def _create_adapter_task(
         # and the session entry so every lifecycle event lands in the same ring
         # buffer the UI receives through the AssistantTransport external state.
         rec = DiagnosticsRecorder()
+        # One bounded, safe diagnostics ring buffer for this session's lifecycle.
+        with contextlib.suppress(Exception):
+            rec.record(EVENT["SESSION_CREATED"], "info", session=short_id(session_key))
         # Link the session diagnostics recorder to the adapter so adapter-level
         # events (config option, prompt, permission response) are recorded.
         adapter.diag = rec
@@ -474,9 +477,14 @@ async def _create_adapter_task(
 
         # Slow startup I/O — must NOT hold _sessions_lock.
         await adapter.start(cwd, dispatch)
+        with contextlib.suppress(Exception):
+            rec.record(EVENT["ADAPTER_READY"], "info", session=short_id(session_key))
     except BaseException:
         # Startup failed after spawn: ensure any owned child is torn down and no
         # broken session entry lingers.
+        if "rec" in dir():
+            with contextlib.suppress(Exception):
+                rec.record(EVENT["ADAPTER_UNAVAILABLE"], "error", session=short_id(session_key))
         if adapter is not None:
             with contextlib.suppress(Exception):
                 await adapter.close()
@@ -611,6 +619,9 @@ async def close_session(session_id: str) -> bool:
             return False
         else:  # active
             entry.state = "closing"
+            with contextlib.suppress(Exception):
+                if entry.diagnostics is not None:
+                    entry.diagnostics.record(EVENT["SESSION_CLOSING"], "info", session=short_id(session_id))
 
             # Create shared close task
             async def _do_close() -> bool:
