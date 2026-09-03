@@ -38,6 +38,7 @@ from .acp_state_projector import (
     _ensure_assistant_message,
     _set_status,
     project_capabilities,
+    project_diagnostics,
     set_capability_error,
 )
 from .models import (
@@ -70,12 +71,7 @@ def _diag_record(adapter, event, level="info", **fields):
 def _diag_project(controller, adapter):
     """Project the safe diagnostics ring buffer into RunController external state."""
     rec = getattr(adapter, "diag", None)
-    if rec is None:
-        return
-    try:
-        controller.state["rtaiDiagnostics"] = rec.snapshot()
-    except Exception:
-        pass
+    project_diagnostics(controller, rec)
 
 
 # Server-authored event names for validated client diagnostics. The frontend emits
@@ -305,6 +301,7 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                     has_add_message = True
                     # The frontend submitted a prompt command over the official queue.
                     _diag_record(adapter, EVENT["PROMPT_COMMAND_RECEIVED"], "info")
+                    _diag_project(controller, adapter)
                     message = cmd["message"]  # validated, stable id already present
                     parent_id = cmd.get("parentId")
                     if isinstance(parent_id, str) and parent_id:
@@ -508,6 +505,7 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
                 except Exception:
                     with contextlib.suppress(Exception):
                         _diag_record(adapter, EVENT["STATE_FLUSH_FAILED"], "error")
+                    _diag_project(controller, adapter)
             except asyncio.CancelledError:
                 # Run callback itself was cancelled (client disconnect)
                 cancelled = True
@@ -611,6 +609,7 @@ async def _apply_capability_command(
     if ctype == RTAI_REFRESH_COMMAND:
         # The frontend issued a capability refresh over the official command queue.
         _diag_record(adapter, EVENT["TRANSPORT_COMMAND_RECEIVED"], "info", kind="refresh")
+        _diag_project(controller, adapter)
         try:
             snapshot = adapter.capability_snapshot()
         except Exception as exc:
@@ -638,6 +637,7 @@ async def _apply_capability_command(
         return
     value = cmd.get("value")
     _diag_record(adapter, EVENT["TRANSPORT_COMMAND_RECEIVED"], "info", kind=kind)
+    _diag_project(controller, adapter)
     try:
         result = await adapter.select(kind, value)
     except Exception as exc:

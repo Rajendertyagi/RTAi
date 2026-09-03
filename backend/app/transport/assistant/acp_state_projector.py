@@ -528,6 +528,32 @@ def set_capability_error(controller: RunController, kind: str, message: str) -> 
         pass
 
 
+def project_diagnostics(controller: RunController, recorder: Any) -> None:
+    """Project the canonical per-session diagnostics recorder into the active run.
+
+    Call ONLY while a RunController is active. Snapshots the single canonical
+    recorder, writes it to ``controller.state["rtaiDiagnostics"]`` (the pinned
+    assistant-stream StateProxy auto-emits the op via its Flusher), then forces an
+    immediate ordered flush so the browser receives it ahead of later chunks.
+
+    Failure is logged through the standard logger only — never via the diagnostics
+    recorder (which would risk recursive logging) and never raised — so prompt /
+    capability / permission execution is never broken.
+    """
+    if controller is None or recorder is None:
+        return
+    try:
+        state = controller.state
+        if state is None:
+            return
+        state["rtaiDiagnostics"] = recorder.snapshot()
+        # Official emission guarantee: flush buffered state ops ahead of any
+        # subsequent stream chunk (matches the `done` / append_text convention).
+        controller.flush()
+    except Exception as exc:  # explicit handling, never a silent broad suppress
+        logger.warning("rtai diagnostics projection failed: %s", exc)
+
+
 class AcpStateProjector:
     """Projects ACP adapter events into ``RunController.state``.
 
@@ -681,16 +707,9 @@ class AcpStateProjector:
 
     def refresh_diagnostics(self) -> None:
         """Project the safe recent diagnostics into RunController external state."""
-        rec = self.diagnostics
-        if rec is None:
-            return
-        try:
-            if self.controller.state is None:
-                return
-            self.controller.state["rtaiDiagnostics"] = rec.snapshot()
-        except Exception:
-            with contextlib.suppress(Exception):
-                self._record_diag(EVENT["STATE_PROJECTION_FAILED"], "error")
+        # Delegates to the shared helper so ACP-event and command-path projection
+        # share one code path (no silent broad suppression, no recursive self-log).
+        project_diagnostics(self.controller, self.diagnostics)
 
     async def handle(self, event: dict[str, Any]) -> None:
         if not isinstance(event, dict):

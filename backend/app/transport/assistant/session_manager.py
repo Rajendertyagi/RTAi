@@ -200,6 +200,11 @@ class AssistantTransportDispatch:
         with contextlib.suppress(Exception):
             projector.permission_registry = self.permissions
             projector.diagnostics = self.diagnostics
+        # Seed the external-state diagnostics snapshot at first bind, AFTER the
+        # canonical recorder is linked, so the UI sees lifecycle events recorded
+        # before the first ACP event arrives.
+        with contextlib.suppress(Exception):
+            self._projector.refresh_diagnostics()
 
     def unbind(self, projector: Any) -> None:
         if self._projector is projector:
@@ -293,7 +298,6 @@ class AssistantSessionEntry:
         # against turn-finally cleanup and session-close cleanup.
         self.permission_lock = asyncio.Lock()
         self.last_activity = time.monotonic()
-        self.diagnostics: DiagnosticsRecorder = DiagnosticsRecorder()
         self.state: str = "active"  # active | closing | closed | close_failed
         self.close_task: asyncio.Task[bool] | None = None
         self.close_error: str | None = None
