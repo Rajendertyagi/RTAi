@@ -451,13 +451,13 @@ function ModelSelectorContent({
       side={renderedSide ?? side ?? "bottom"}
       sideOffset={sideOffset}
       className={cn(
-        "bg-popover w-72 min-w-(--anchor-width) overflow-hidden rounded-xl p-0",
+        "bg-popover w-72 min-w-(--anchor-width) max-h-[min(calc(100vh-2rem),24rem)] overflow-hidden rounded-xl p-0",
         className,
       )}
       {...props}
     >
       <Command
-        className="bg-transparent"
+        className="flex flex-col min-h-0 bg-transparent"
         shouldFilter={!unfiltered}
         {...(value !== undefined ? { defaultValue: value } : {})}
       >
@@ -506,7 +506,7 @@ function ModelSelectorList({
     <CommandList
       data-slot="model-selector-list"
       className={cn(
-        "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "max-h-72 min-h-0 overflow-y-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
       {...props}
