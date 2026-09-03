@@ -437,7 +437,7 @@ export function CapabilityControls() {
             />
             <ModelSelectorContent
               align="start"
-              searchable={false}
+              searchable
               className={
                 pendingForKind("model") || pendingForKind("thinking")
                   ? "[&_[data-slot='model-selector-effort']]:pointer-events-none [&_[data-slot='model-selector-effort']]:opacity-50"
