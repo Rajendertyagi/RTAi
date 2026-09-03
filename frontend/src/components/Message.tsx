@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   AuiIf,
   ErrorPrimitive,
@@ -10,7 +11,7 @@ import {
   useAuiState,
   type ThreadMessage,
 } from "@assistant-ui/react";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, RotateCw, FileDown } from "lucide-react";
 
 // Official Assistant UI Elements (registry-copied at immutable commit
 // b6e7ab88b5e6e60866695d31a08adc3a80f449ff, pinned to @assistant-ui/react@0.15.17).
@@ -25,13 +26,25 @@ import {
   ToolGroupTrigger,
   ToolGroupContent,
 } from "./assistant-ui/tool-group";
-import { RtaiToolFallback } from "./assistant-ui/rtai-tool-fallback";
 import { Image } from "./assistant-ui/image";
 import { File } from "./assistant-ui/file";
 import { MarkdownText } from "./assistant-ui/markdown-text";
 import { ErrorState } from "./assistant-ui/elements/error-state";
 import { StoppedRun } from "./assistant-ui/elements/stopped-run";
 import { ThinkingIndicator } from "./assistant-ui/elements/thinking-indicator";
+import { useRtaiCapabilities } from "@/hooks/useRtaiAssistantState";
+
+// Assistant messages carry two extra, backend-stamped timing fields (see
+// acp_state_projector._stamp_run_duration): started_at (float seconds) and
+// duration_ms (int milliseconds). They are not part of the base ThreadMessage
+// type, so we extend it locally for the footer timer.
+type TimedMessage = ThreadMessage & {
+  started_at?: number;
+  duration_ms?: number;
+};
+
+const footerActionClass =
+  "group flex h-7 w-7 items-center justify-center rounded-md bg-surface-elevated border border-border text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring";
 
 function MarkdownTextWrapper() {
   return <MarkdownText />;
@@ -77,7 +90,112 @@ function MessageThinking() {
   return <ThinkingIndicator label="Thinking" />;
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds - minutes * 60);
+  return `${minutes}m ${seconds}s`;
+}
+
+function MessageTimer({ message }: { message: TimedMessage }) {
+  const isRunning = useAuiState((s) => s.message.status?.type === "running");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setNow(Date.now()), 200);
+    return () => clearInterval(id);
+  }, [isRunning]);
+  if (!isRunning && message.duration_ms == null) return null;
+  const start =
+    message.started_at ??
+    (message.createdAt instanceof Date ? message.createdAt.getTime() : Date.now());
+  const elapsed = isRunning ? now - start : message.duration_ms ?? 0;
+  return (
+    <span className="inline-flex items-center gap-1" data-testid="message-duration">
+      {isRunning && (
+        <span className="h-1.5 w-1.5 rounded-full bg-[#1D9E75] animate-pulse" aria-hidden />
+      )}
+      {formatDuration(elapsed)}
+    </span>
+  );
+}
+
+function MessageFooter({ message }: { message: TimedMessage }) {
+  const caps = useRtaiCapabilities();
+  const modelLabel =
+    caps?.models?.find((m) => m.id === caps.selected.model)?.label ??
+    caps?.selected.model ??
+    null;
+  return (
+    <div
+      className="flex items-center justify-between gap-2 pt-1 text-[12px] text-muted-foreground"
+      data-testid="message-footer"
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        {modelLabel && (
+          <span className="inline-flex items-center gap-1 truncate" data-testid="message-model">
+            <span className="h-2 w-2 rounded-full bg-primary" aria-hidden />
+            {modelLabel}
+          </span>
+        )}
+        <MessageTimer message={message} />
+        {message.createdAt && (
+          <span data-testid="message-date">
+            {message.createdAt.toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "numeric",
+            })}
+          </span>
+        )}
+      </div>
+      <ActionBarPrimitive.Root
+        autohide="never"
+        hideWhenRunning={false}
+        className="flex items-center gap-1"
+      >
+        <ActionBarPrimitive.Reload aria-label="Regenerate" className={footerActionClass}>
+          <RotateCw className="h-3.5 w-3.5" />
+        </ActionBarPrimitive.Reload>
+        <ActionBarPrimitive.Copy
+          copiedDuration={2000}
+          aria-label="Copy message"
+          className={footerActionClass}
+        >
+          <Check className="h-3.5 w-3.5 text-status-success hidden group-data-[copied=true]:block" />
+          <Copy className="h-3.5 w-3.5 group-data-[copied=true]:hidden" />
+        </ActionBarPrimitive.Copy>
+        <ActionBarPrimitive.ExportMarkdown
+          filename="message.md"
+          aria-label="Export markdown"
+          className={footerActionClass}
+        >
+          <FileDown className="h-3.5 w-3.5" />
+        </ActionBarPrimitive.ExportMarkdown>
+      </ActionBarPrimitive.Root>
+    </div>
+  );
+}
+
 export function MessageItem({ message }: { message: ThreadMessage }) {
+  // Guards are computed unconditionally (rules of hooks) before the role branch.
+  const hasReasoning = useAuiState((s) =>
+    s.message.parts.some((p) => p.type === "reasoning"),
+  );
+  const hasTool = useAuiState((s) =>
+    s.message.parts.some((p) => p.type === "tool-call"),
+  );
+  const hasResponse = useAuiState((s) =>
+    s.message.parts.some(
+      (p) =>
+        (p.type === "text" && (p.text ?? "").trim() !== "") ||
+        p.type === "image" ||
+        p.type === "file",
+    ),
+  );
+
   if (message.role === "user") {
     return (
       <MessagePrimitive.Root className="flex gap-3 py-2 flex-row-reverse">
@@ -92,22 +210,16 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
   return (
     <MessagePrimitive.Root className="relative flex gap-3 py-2">
       <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 bg-primary text-primary-foreground">AI</div>
-      <div className="w-full bg-card border border-border rounded-xl p-2.5 relative group">
-        {/* Official Assistant UI grouping: MessagePrimitive.GroupedParts coalesces
-            consecutive reasoning and tool-call parts into native group nodes. Each
-            node is rendered with the official Element composition — no custom
-            group/leaf wrappers. The official ToolFallback owns generic tool
-            rendering (including approval via respondToApproval); part.toolUI owns
-            any registered per-tool renderer. */}
-        <MessagePrimitive.GroupedParts
-          groupBy={groupPartByType({
-            reasoning: ["group-reasoning"],
-            "tool-call": ["group-tool"],
-          })}
-        >
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-reasoning": {
+      <div className="w-full flex flex-col gap-2">
+        {/* Reasoning card — thinking is pulled into its own card above the response
+            so it never merges with the answer or tool activity. */}
+        {hasReasoning && (
+          <div className="bg-card border border-border rounded-xl p-2.5">
+            <MessagePrimitive.GroupedParts
+              groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}
+            >
+              {({ part, children }) => {
+                if (part.type !== "group-reasoning") return null;
                 const running = part.status.type === "running";
                 return (
                   <ReasoningRoot streaming={running}>
@@ -117,8 +229,20 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                     </ReasoningContent>
                   </ReasoningRoot>
                 );
-              }
-              case "group-tool":
+              }}
+            </MessagePrimitive.GroupedParts>
+          </div>
+        )}
+
+        {/* Tool card — tool activity is its own distinct block (modern chat apps),
+            never buried inside the response. */}
+        {hasTool && (
+          <div className="bg-card border border-border rounded-xl p-2.5">
+            <MessagePrimitive.GroupedParts
+              groupBy={groupPartByType({ "tool-call": ["group-tool"] })}
+            >
+              {({ part, children }) => {
+                if (part.type !== "group-tool") return null;
                 return (
                   <ToolGroupRoot variant="ghost">
                     <ToolGroupTrigger
@@ -128,34 +252,41 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                     <ToolGroupContent>{children}</ToolGroupContent>
                   </ToolGroupRoot>
                 );
-              case "text":
-                return <MarkdownTextWrapper />;
-              case "reasoning":
-                // Ungrouped reasoning leaf: the official Reasoning element's
-                // renderer is `() => <MarkdownText />`, so render the same
-                // context-driven markdown directly.
-                return <MarkdownText />;
-              case "tool-call":
-                // Official Thread contract: prefer a registered tool UI (toolUI),
-                // otherwise the official ToolFallback (which itself calls
-                // respondToApproval for approval gates).
-                return part.toolUI ?? <RtaiToolFallback {...part} />;
-              case "image":
-                return <Image {...part} />;
-              case "file":
-                return <File {...part} />;
-              case "indicator":
-                return null;
-              default:
-                return null;
-            }
-          }}
-        </MessagePrimitive.GroupedParts>
+              }}
+            </MessagePrimitive.GroupedParts>
+          </div>
+        )}
 
-        {/* Official message status elements: runtime error, cancelled run,
-            and the empty-running "Thinking" indicator. Wired with the
-            official MessagePrimitive.Error / ErrorPrimitive gate and the
-            message-scope reload()/delete() methods (no custom REST). */}
+        {/* Response card — final answer text, images, files. Reasoning and
+            tool-calls are owned by their own cards above, so they render null here
+            to avoid duplication. */}
+        {hasResponse && (
+          <div className="bg-card border border-border rounded-xl p-2.5">
+            <MessagePrimitive.GroupedParts groupBy={groupPartByType({})}>
+              {({ part }) => {
+                switch (part.type) {
+                  case "text":
+                    return <MarkdownTextWrapper />;
+                  case "image":
+                    return <Image {...part} />;
+                  case "file":
+                    return <File {...part} />;
+                  case "group-tool":
+                  case "tool-call":
+                  case "reasoning":
+                  case "indicator":
+                    return null;
+                  default:
+                    return null;
+                }
+              }}
+            </MessagePrimitive.GroupedParts>
+          </div>
+        )}
+
+        {/* Message-level status: error, cancelled run, and the empty-running
+            "Thinking" indicator. Rendered at column level so they show even when
+            no content card is present. */}
         <MessageError />
         <AuiIf
           condition={(s) =>
@@ -180,22 +311,10 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
           <MessageThinking />
         </AuiIf>
 
-        {/* Copy button — floats on hover, hidden on non-last messages */}
-        <ActionBarPrimitive.Root
-          hideWhenRunning
-          autohide="not-last"
-          autohideFloat="single-branch"
-          className="absolute -top-2 -right-2 flex rounded-lg shadow-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
-        >
-          <ActionBarPrimitive.Copy
-            copiedDuration={2000}
-            aria-label="Copy message"
-            className="group flex h-7 w-7 items-center justify-center rounded-md bg-surface-elevated border border-border text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
-          >
-            <Check className="h-3.5 w-3.5 text-status-success hidden group-data-[copied=true]:block" />
-            <Copy className="h-3.5 w-3.5 group-data-[copied=true]:hidden" />
-          </ActionBarPrimitive.Copy>
-        </ActionBarPrimitive.Root>
+        {/* Response footer: model · live/elapsed time · date (left); official
+            assistant-ui action buttons (reload / copy / export) on the right. No
+            custom action components. */}
+        <MessageFooter message={message} />
       </div>
     </MessagePrimitive.Root>
   );

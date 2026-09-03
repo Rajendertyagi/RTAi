@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -49,7 +50,12 @@ def _ensure_assistant_message(controller: RunController) -> int:
         length = 0
     if length == 0:
         messages.append(
-            {"role": "assistant", "id": str(uuid.uuid4()), "parts": [{"type": "text", "text": ""}]}
+            {
+                "role": "assistant",
+                "id": str(uuid.uuid4()),
+                "started_at": time.time(),
+                "parts": [{"type": "text", "text": ""}],
+            }
         )  # type: ignore[attr-defined]
         return 0
     try:
@@ -58,7 +64,12 @@ def _ensure_assistant_message(controller: RunController) -> int:
         last_role = None
     if last_role != "assistant":
         messages.append(
-            {"role": "assistant", "id": str(uuid.uuid4()), "parts": [{"type": "text", "text": ""}]}
+            {
+                "role": "assistant",
+                "id": str(uuid.uuid4()),
+                "started_at": time.time(),
+                "parts": [{"type": "text", "text": ""}],
+            }
         )  # type: ignore[attr-defined]
         return length
     try:
@@ -91,8 +102,8 @@ def _append_text_to_assistant(controller: RunController, delta: str, *, kind: st
                 except Exception:
                     continue
             if found is None:
-                parts.append({"type": "reasoning", "text": ""})  # type: ignore[attr-defined]
-                found = len(parts) - 1  # type: ignore[arg-type]
+                parts.insert(0, {"type": "reasoning", "text": ""})  # type: ignore[attr-defined]
+                found = 0
             parts[found]["text"] += delta  # type: ignore[index]
         except Exception:
             with contextlib.suppress(Exception):
@@ -114,6 +125,32 @@ def _append_text_to_assistant(controller: RunController, delta: str, *, kind: st
                 controller.append_state_text(["messages", idx, "parts", 0, "text"], delta)
 
 
+def _stamp_run_duration(controller: RunController) -> None:
+    """Record wall-clock generation time on the last assistant message once the run ends.
+
+    Stamps ``started_at`` (set in _ensure_assistant_message) and ``duration_ms`` so the
+    UI can show a final elapsed time that survives reload. No-op if anything is missing.
+    """
+    try:
+        state = controller.state
+        if state is None:
+            return
+        messages = state.get("messages")
+        if not messages:
+            return
+        last = messages[-1]
+        if not isinstance(last, dict) or last.get("role") != "assistant":
+            return
+        started = last.get("started_at")
+        if started is None:
+            return
+        now = time.time()
+        last["duration_ms"] = int((now - started) * 1000)
+        last["ended_at"] = now
+    except Exception:
+        pass
+
+
 def _set_status(controller: RunController, status: str, *, error: str | None = None) -> None:
     """Set the top-level turn status in state."""
     try:
@@ -127,14 +164,16 @@ def _set_status(controller: RunController, status: str, *, error: str | None = N
                     controller.state["error"] = ""  # type: ignore[index]
             except KeyError:
                 pass
-    except Exception:
-        try:
-            if controller.state is None:
-                controller.state = {"messages": [], "status": status}  # type: ignore[assignment]
-            else:
-                controller.state["status"] = status  # type: ignore[index]
         except Exception:
-            pass
+            try:
+                if controller.state is None:
+                    controller.state = {"messages": [], "status": status}  # type: ignore[assignment]
+                else:
+                    controller.state["status"] = status  # type: ignore[index]
+            except Exception:
+                pass
+    if status in {"complete", "error", "cancelled", "incomplete"}:
+        _stamp_run_duration(controller)
 
 
 def _find_tool_part_index(parts: Any, tool_call_id: str) -> int | None:
