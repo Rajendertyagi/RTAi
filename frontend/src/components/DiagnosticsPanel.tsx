@@ -214,7 +214,7 @@ export function DiagnosticsPanel({
         retains the most recent 200 events.
       </p>
 
-      <div ref={scrollRef} className="flex-1 overflow-auto px-4 pb-6 font-mono text-[11px]">
+      <div ref={scrollRef} className="flex-1 overflow-auto px-4 pb-6 font-mono text-[13px]">
         {filtered.length === 0 ? (
           <p className="py-8 text-muted-foreground">
             No runtime events yet. Safe diagnostics appear here once a session starts or
@@ -235,11 +235,11 @@ export function DiagnosticsPanel({
                       </span>
                       <span className="font-semibold">{e.event}</span>
                       {e.origin === "client" && (
-                        <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                        <span className="rounded bg-muted px-1 text-[11px] text-muted-foreground">
                           client
                         </span>
                       )}
-                      <span className="ml-auto text-[10px] text-muted-foreground group-open:hidden">
+                      <span className="ml-auto text-[11px] text-muted-foreground group-open:hidden">
                         expand
                       </span>
                     </summary>
@@ -247,13 +247,13 @@ export function DiagnosticsPanel({
                       <button
                         type="button"
                         onClick={() => copyEvent(e, key)}
-                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
                       >
                         {isCopied ? <Check className="size-3" /> : <Copy className="size-3" />}
                         {isCopied ? "Copied" : "Copy"}
                       </button>
                       {copyError && (
-                        <span className="text-[10px] text-destructive">Copy unavailable</span>
+                        <span className="text-[11px] text-destructive">Copy unavailable</span>
                       )}
                       <div className="flex flex-wrap gap-x-4 gap-y-1">
                         {Object.entries(e)
