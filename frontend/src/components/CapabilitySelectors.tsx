@@ -409,6 +409,10 @@ export function CapabilityControls() {
     if (caps?.models) {
       return (
         <span key="model" className="inline-flex items-center gap-1.5">
+          {/* Strictly controlled: empty string (never undefined) so the
+              official component cannot fall back to models[0] or hold
+              internal selection state; the official placeholder shows
+              until the backend confirms selected.model / thinking. */}
           <ModelSelectorRoot
             models={caps.models.map((m) => ({
               id: m.id,
@@ -420,18 +424,26 @@ export function CapabilityControls() {
                   }))
                 : undefined,
             }))}
-            value={caps.selected.model ?? undefined}
+            value={caps.selected.model ?? ""}
             onValueChange={(id) => handleSelect("model", id)}
-            effort={caps.selected.thinking ?? undefined}
+            effort={caps.selected.thinking ?? ""}
             onEffortChange={(id) => handleSelect("thinking", id)}
           >
             <ModelSelectorTrigger
               variant="ghost"
               size="sm"
               className="px-2 py-1"
-              disabled={pendingForKind("model")}
+              disabled={pendingForKind("model") || pendingForKind("thinking")}
             />
-            <ModelSelectorContent align="start" searchable={false} />
+            <ModelSelectorContent
+              align="start"
+              searchable={false}
+              className={
+                pendingForKind("model") || pendingForKind("thinking")
+                  ? "[&_[data-slot='model-selector-effort']]:pointer-events-none [&_[data-slot='model-selector-effort']]:opacity-50"
+                  : undefined
+              }
+            />
           </ModelSelectorRoot>
           {caps.error?.reason_code === "model" && (
             <span
