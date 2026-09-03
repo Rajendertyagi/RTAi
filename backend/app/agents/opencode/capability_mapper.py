@@ -163,7 +163,10 @@ class AcpCapabilityState:
 
         A full echo always arrives after set_config_option and inside
         config_option_update notifications, so selection changes refresh every
-        dependent slice - notably thought_level after a model change.
+        dependent slice - notably thought_level after a model change. ACP
+        documents the echo as "the full set of configuration options and their
+        current values", making it the single authority for selections and for
+        the slices they affect.
 
         Returns a small safe summary (no model values/ids) so callers can tell
         whether the echo contained a model-selection option.
@@ -206,6 +209,23 @@ class AcpCapabilityState:
                     ThinkingOption(id=o.id, label=o.label, model_id=self.selected_model or "")
                     for o in thinking
                 )
+            )
+        elif model_present and self.thinking.available and self.thinking.items:
+            # Model confirmed but this echo reported no thought_level option.
+            # ThinkingOption entries are scoped to the model that announced
+            # them, so keeping the previous model's options would present them
+            # as if they belonged to the newly confirmed model. Mark the
+            # section honestly unavailable instead; no options or defaults
+            # are invented. A complete echo (set_config_option response,
+            # config_option_update, or the next refresh) restores the slice.
+            self.thinking = CapabilitySection(
+                items=(),
+                unavailable=_unavailable(
+                    UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER,
+                    "The runtime did not report thinking options for the "
+                    + "confirmed model; they return with the next complete "
+                    + "config-options echo.",
+                ),
             )
         if modes:
             self.modes = CapabilitySection(items=tuple(modes))
@@ -252,10 +272,20 @@ class AcpCapabilityState:
     def apply_selection_locally(self, kind: str, value: str) -> None:
         """Provisional pre-ack view; authoritative echoes replace it later.
 
-        Model selection is intentionally NOT applied here: the active model is
-        updated only from an authoritative ACP config-options echo (see
-        AcpSession.select), so a requested model can never reach the badge
-        unless OpenCode confirmed it.
+        Model selection is intentionally NOT applied here: the active model
+        is updated only from an authoritative ACP config-options echo (see
+        AcpSession.select), so a requested value can never reach the badge
+        unless the runtime confirmed it. Mode/thinking now follow the same
+        rule: AcpSession.select verifies the set_config_option echo, and the
+        legacy set_session_mode path never writes locally (its response
+        carries no confirmed mode).
+
+        Sole remaining caller (proven non-config path): the OpenCode Server
+        HTTP adapter (opencode/server_adapter.py select()). That transport
+        has no session-level selection endpoint; choices are recorded and
+        applied per-prompt via POST /session/{id}/prompt_async request
+        fields (model/agent/variant), so the write is the only available
+        local record and is honestly labeled "Applied to the next prompt".
         """
         if kind == "model":
             return

@@ -716,8 +716,8 @@ class AcpSession(AgentAdapter):
     async def select(self, kind: SelectionKind, value_id: str) -> SelectionResult:
         """Apply a selection using runtime-provided config ids only.
 
-        The authoritative echo (config_option_update / mode state) replaces
-        local views; failures return a correlated non-applied result.
+        Selections are echo-authoritative: a value becomes selected only when
+        the runtime echo reports it; failures return a non-applied result.
 
         ACP has no agent selection: ``kind == "agent"`` is answered with a
         non-applied result instead of being redirected to the mode config.
@@ -737,13 +737,30 @@ class AcpSession(AgentAdapter):
         self._record_diag(EVENT["CAPABILITY_SELECTION_REQUESTED"], "info", kind=kind)
         try:
             if kind == "mode" and caps.mode_config_id is None:
+                # Legacy fallback. ACP session/set_mode returns only _meta —
+                # no confirmed current mode — so there is nothing
+                # authoritative to verify against (SDK SetSessionModeResponse).
                 await self._connection.set_session_mode(
                     session_id=self._session_id, mode_id=value_id
                 )
-                caps.apply_selection_locally(kind, value_id)
-                self._record_diag(EVENT["CAPABILITY_SELECTION_UNAVAILABLE"], "warn", kind=kind)
+                # No local write: without an echo there is no confirmation,
+                # so the prior confirmed mode stays selected. The agent's
+                # current_mode_update notification remains the authoritative
+                # confirmation and is projected on the next refresh/snapshot.
+                self._record_diag(
+                    EVENT["CAPABILITY_SELECTION_UNCONFIRMED"],
+                    "warn",
+                    kind=kind,
+                    status="legacy_set_mode_no_echo",
+                )
                 return SelectionResult(
-                    kind=kind, applied=True, message="Legacy set_session_mode accepted."
+                    kind=kind,
+                    applied=False,
+                    message=(
+                        "Mode change sent via the legacy session/set_mode "
+                        "request; the runtime has not confirmed it, so the "
+                        "previously confirmed mode stays selected."
+                    ),
                 )
             config_id = (
                 {
@@ -802,9 +819,47 @@ class AcpSession(AgentAdapter):
                 )
             if isinstance(options, list):
                 caps.ingest_config_options(options)
-            caps.apply_selection_locally(kind, value_id)
+                confirmed_selected, confirmed_config_id = (
+                    (caps.selected_mode, caps.mode_config_id)
+                    if kind == "mode"
+                    else (caps.selected_thinking, caps.thought_level_config_id)
+                )
+                if (
+                    confirmed_selected == value_id
+                    and confirmed_config_id == config_id
+                ):
+                    self._record_diag(
+                        EVENT["CAPABILITY_ECHO_MATCH"], "info", kind=kind
+                    )
+                    return SelectionResult(
+                        kind=kind,
+                        applied=True,
+                        message="Runtime confirmed the selection.",
+                    )
+                self._record_diag(
+                    EVENT["CAPABILITY_ECHO_MISMATCH"], "warn", kind=kind
+                )
+                return SelectionResult(
+                    kind=kind,
+                    applied=False,
+                    message=(
+                        "Runtime did not confirm the requested "
+                        f"{kind} selection; the previously confirmed "
+                        "selection stays."
+                    ),
+                )
+            self._record_diag(
+                EVENT["CAPABILITY_ECHO_MISMATCH"], "warn",
+                kind=kind, status="echo_not_a_list",
+            )
             return SelectionResult(
-                kind=kind, applied=True, message="Runtime accepted the selection."
+                kind=kind,
+                applied=False,
+                message=(
+                    "Runtime response did not include config options, so the "
+                    f"requested {kind} selection is not confirmed; the "
+                    "previously confirmed selection stays."
+                ),
             )
         except Exception as exc:
             return SelectionResult(kind=kind, applied=False, message=f"Selection failed: {exc}")
