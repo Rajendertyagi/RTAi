@@ -22,6 +22,7 @@ import {
 } from "react";
 import type { ReadonlyJSONObject } from "assistant-stream/utils";
 import { WELCOME_SUGGESTIONS } from "../data/welcomeSuggestions";
+import { useRtaiSessionId } from "../hooks/useRtaiAssistantState";
 import { RtaiImageAttachmentAdapter } from "./rtaiImageAttachmentAdapter";
 import type { BackendMessage, RtaiAssistantState } from "../types/rtaiAssistantState";
 // Side-effect import: activates the official AssistantTransport command + state
@@ -48,6 +49,62 @@ const getInitialCwd = (): string | undefined => {
   const v = localStorage.getItem("project-folder");
   return v && v.trim() ? v.trim() : undefined;
 };
+
+// --- Durable per-tab session identity (sessionStorage, NEVER localStorage) ---
+// Root-cause fix for OpenCode ACP child accumulation across reloads: previously
+// every browser reload mounted a runtime whose initialState carried NO sessionId,
+// so the first POST /assistant minted a new backend session key and one new
+// `opencode.exe acp` child per reload, while old sessions lingered until the
+// 30-minute idle timeout. sessionStorage is scoped to this origin AND this
+// browser tab, so:
+//   - reloading the same tab reuses the same opaque sessionId (no new child),
+//   - a different tab never sees this value (deliberate tabs stay isolated),
+//   - ONLY the opaque sessionId is ever persisted — no messages, prompts,
+//     responses, capability options, model values, credentials, paths, or
+//     diagnostics.
+// There is deliberately NO unload/beforeunload/pagehide DELETE: reload is the
+// main scenario this fixes, and unload deletion would defeat session reuse.
+// Abandoned tabs are handled by the backend idle/disconnect lifecycle instead.
+const RTAI_SESSION_STORAGE_KEY = "rtai.assistant.sessionId";
+// The backend mints sessionId via str(uuid.uuid4()) (models.ensure_state_shape),
+// so only well-formed UUIDs are ever hydrated back — junk or foreign values in
+// storage are ignored and the backend simply generates a fresh id.
+const RTAI_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function readStoredSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(RTAI_SESSION_STORAGE_KEY);
+    if (typeof raw !== "string" || !RTAI_SESSION_ID_PATTERN.test(raw)) {
+      return null;
+    }
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSessionId(sessionId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (window.sessionStorage.getItem(RTAI_SESSION_STORAGE_KEY) !== sessionId) {
+      window.sessionStorage.setItem(RTAI_SESSION_STORAGE_KEY, sessionId);
+    }
+  } catch {
+    // Storage unavailable (e.g. blocked): in-runtime reuse still works via the
+    // transport's own state; reloads simply mint fresh sessions as before.
+  }
+}
+
+function clearStoredSessionId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(RTAI_SESSION_STORAGE_KEY);
+  } catch {
+    // ignore: deliberate replacement must never fail because of storage
+  }
+}
 
 // Derived source-message union for the official converter. Authoritative backend
 // messages already carry stable ids; pending add-message commands supply
@@ -203,6 +260,23 @@ export function useSessionLifecycle(): SessionLifecycle {
   return ctx;
 }
 
+// Persists the AUTHORITATIVE backend session identity into per-tab sessionStorage.
+// Rendered inside the transport-ready subtree only: the gate guarantees the
+// AssistantTransport external state exists, so the single centralized access hook
+// (useRtaiSessionId) is safe here. Only the opaque sessionId that authoritative
+// streamed state supplies/changes is ever written (never messages, prompts,
+// responses, capability options, model values, credentials, paths, or
+// diagnostics); a null sessionId writes nothing (nothing authoritative yet).
+// sessionStorage is per-tab, so separate tabs never share a session id.
+function SessionIdStorageSync() {
+  const sessionId = useRtaiSessionId();
+  useEffect(() => {
+    if (!sessionId) return;
+    writeStoredSessionId(sessionId);
+  }, [sessionId]);
+  return null;
+}
+
 function TransportReadyGate({ children }: { children: ReactNode }) {
   // Official readiness signal: the AssistantTransport-backed main thread mounts
   // asynchronously after a placeholder (empty) thread. While that placeholder is
@@ -258,11 +332,20 @@ function SendCommandBridge({
 }
 
 function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
-  // Fresh per mount: initialState carries NO sessionId, so the backend generates a new
-  // session on the first /assistant POST after a remount. Thereafter the sessionId
-  // round-trips via the converter's external state. All messages, attachments, queued
-  // commands, approvals, running state, and capability state are recreated empty.
+  // Durable per-tab session identity: hydrate the opaque sessionId persisted by
+  // SessionIdStorageSync from sessionStorage (same origin + same tab ONLY). A
+  // browser reload remounts this runtime with the SAME backend session key, so
+  // the first POST /assistant reuses the existing adapter instead of spawning
+  // another opencode.exe child. No client-side random generation happens here:
+  // when no valid stored id exists, the backend mints one
+  // (models.ensure_state_shape) and streams it back; SessionIdStorageSync then
+  // persists it for the next reload. Deliberate replacement (New Chat / cwd
+  // change) clears the stored id via resetSession() BEFORE this remount, so a
+  // fresh session is guaranteed there. All messages, attachments, queued
+  // commands, approvals, running state, and capability state are still
+  // recreated empty on every mount.
   const initialState: RtaiAssistantState = {
+    sessionId: readStoredSessionId() ?? undefined,
     cwd: getInitialCwd(),
     messages: [],
     status: "ready",
@@ -319,14 +402,27 @@ function RtaiAssistantRuntime({ children }: { children: ReactNode }) {
   return (
     <AssistantRuntimeProvider runtime={runtime} config={RTAI_CONFIG}>
       <SendCommandBridge sendCommandRef={sendCommandRef} />
-      <TransportReadyGate>{children}</TransportReadyGate>
+      <TransportReadyGate>
+        <SessionIdStorageSync />
+        {children}
+      </TransportReadyGate>
     </AssistantRuntimeProvider>
   );
 }
 
 export function RtaiRuntimeProvider({ children }: { children: ReactNode }) {
   const [sessionEpoch, setSessionEpoch] = useState(0);
-  const resetSession = useCallback(() => setSessionEpoch((e) => e + 1), []);
+  // Deliberate session replacement (New Chat / cwd change) funnels through this
+  // single choke point. The stored per-tab sessionId is cleared BEFORE the epoch
+  // bump so the remounted runtime hydrates no stale id. Callers (Sidebar) close
+  // the old backend session via DELETE /assistant/sessions/{id} first and only
+  // reset on success; on close failure they surface the error WITHOUT resetting,
+  // so a failed/racing close can never silently reuse a closing id — the
+  // backend's closing-tombstone pre-stream 409 guard stays the second defense.
+  const resetSession = useCallback(() => {
+    clearStoredSessionId();
+    setSessionEpoch((e) => e + 1);
+  }, []);
 
   return (
     <SessionLifecycleContext.Provider value={{ resetSession }}>
