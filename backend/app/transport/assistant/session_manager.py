@@ -23,7 +23,11 @@ from ...agents.factory import AgentAdapterFactory
 from ...core.protocol import resolve_project_path
 from ...logging_config import log_event, short_id
 from .acp_state_projector import _permission_meta_from_event
-from ...diagnostics import EVENT, DiagnosticsRecorder
+from ...diagnostics import (
+    EVENT,
+    SessionDiagnosticsRecorder,
+    get_diagnostics_hub,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +353,66 @@ def touch_session(session_key: str) -> None:
     _touch_session_sync(session_key)
 
 
+def _compute_session_counts() -> dict[str, int]:
+    """Safe bounded counts from the session registry.
+
+    Caller must already hold ``_sessions_lock`` (or accept a racy-but-harmless
+    read). Counts are ints only — safe for browser diagnostics output.
+
+    - liveSessions: entries in state "active"
+    - creatingSessions: in-flight single-flight creation tasks (not yet done)
+    - closingSessions: entries in state "closing" plus closing tombstones
+    - liveAdapters: entries whose owned adapter has not been closed
+    """
+    live = 0
+    closing = 0
+    adapters = 0
+    for entry in _sessions.values():
+        if not isinstance(entry, AssistantSessionEntry):
+            closing += 1  # _ClosingMarker tombstone: a close is in progress
+            continue
+        if entry.state == "active":
+            live += 1
+        elif entry.state == "closing":
+            closing += 1
+        if entry.state in ("active", "closing") and not entry._closed:
+            adapters += 1
+    creating = sum(1 for task in _creation_tasks.values() if not task.done())
+    return {
+        "liveSessions": live,
+        "creatingSessions": creating,
+        "closingSessions": closing,
+        "liveAdapters": adapters,
+    }
+
+
+def registry_counts() -> dict[str, int]:
+    """Read-only current safe counts for the global diagnostics endpoint.
+
+    Sync and lock-free on purpose: all registry mutations happen on the event
+    loop and this read performs no ``await``, so it cannot interleave with a
+    mutation. Returns ints only — never session ids or adapter internals.
+    """
+    return _compute_session_counts()
+
+
+async def _record_counts_event() -> None:
+    """Record one safe ``app.counts`` event into the central hub.
+
+    Exact owner point for count transitions: called by the session manager
+    right after a create or close transition completes, so the hub's most
+    recent ``app.counts`` event always reflects the registry after that
+    transition. Values are bounded ints only.
+    """
+    try:
+        async with _sessions_lock:
+            counts = _compute_session_counts()
+        with contextlib.suppress(Exception):
+            get_diagnostics_hub().record(EVENT["APP_COUNTS"], "info", **counts)
+    except Exception:
+        pass
+
+
 def _resolve_assistant_cwd(raw_state: Any | None, raw_config: Any | None) -> Path:
     """Derive the project folder for a new assistant session.
 
@@ -430,6 +494,15 @@ async def get_or_create_adapter(
             )
             _creation_tasks[session_key] = wait_task
             wait_task.add_done_callback(functools.partial(_on_creation_task_done, session_key))
+            # Exact owner point: adapter/session creation REQUESTED (single-flight
+            # registration). Lifecycle events enter the ONE central diagnostics
+            # hub, tagged with the short session correlation id only.
+            with contextlib.suppress(Exception):
+                get_diagnostics_hub().record(
+                    EVENT["ADAPTER_CREATION_REQUESTED"],
+                    "info",
+                    session=short_id(session_key),
+                )
 
     # 2) Await the (possibly shared) creation task OUTSIDE the registry lock. The
     # shared task is shielded so cancellation of one waiter does not cancel creation
@@ -460,11 +533,12 @@ async def _create_adapter_task(
     adapter: AgentAdapter | None = None
     try:
         adapter = factory.create()
-        # One bounded recorder per session, shared by the adapter, the dispatch,
-        # and the session entry so every lifecycle event lands in the same ring
-        # buffer the UI receives through the AssistantTransport external state.
-        rec = DiagnosticsRecorder()
-        # One bounded, safe diagnostics ring buffer for this session's lifecycle.
+        # Per-session diagnostics VIEW of the ONE central hub (not a separate
+        # recorder) linked to the adapter, the dispatch, and the session entry so
+        # every prompt/tool/permission/lifecycle event lands in the ONE hub.
+        rec = SessionDiagnosticsRecorder(short_id(session_key))
+        # Session-tagged creation event into the central hub (single owner point:
+        # "session created / adapter provisioning started").
         with contextlib.suppress(Exception):
             rec.record(EVENT["SESSION_CREATED"], "info", session=short_id(session_key))
         # Link the session diagnostics recorder to the adapter so adapter-level
@@ -481,6 +555,10 @@ async def _create_adapter_task(
 
         # Slow startup I/O — must NOT hold _sessions_lock.
         await adapter.start(cwd, dispatch)
+        # Exact owner point: safe child-process spawned status. No command line,
+        # no PID, no argv — only the fixed token "spawned" and the short id.
+        with contextlib.suppress(Exception):
+            rec.record(EVENT["ADAPTER_SPAWNED"], "info", status="spawned")
         with contextlib.suppress(Exception):
             rec.record(EVENT["ADAPTER_READY"], "info", session=short_id(session_key))
     except BaseException:
@@ -530,6 +608,11 @@ async def _create_adapter_task(
             _sessions[session_key] = entry
             _creation_tasks.pop(session_key, None)
             close_outside = False
+    if not close_outside:
+        # Exact owner point: counts recorded right after the create transition
+        # (entry registered as live). Bounded ints only.
+        with contextlib.suppress(Exception):
+            await _record_counts_event()
     if close_outside:
         # Close the adapter that was just started but should not be published
         with contextlib.suppress(Exception):
@@ -547,6 +630,8 @@ async def _create_adapter_task(
                 # The current task is already popped before, but keep safe
                 _creation_tasks.pop(session_key, None)
         # Return controlled sentinel, not exception, so no unobserved Task exception
+        with contextlib.suppress(Exception):
+            await _record_counts_event()
         return _CREATION_ABORTED  # type: ignore[return-value]
     log_event(
         logger,
@@ -664,6 +749,15 @@ async def close_session(session_id: str) -> bool:
                         error=type(exc).__name__,
                     )
                     raise
+                # Exact owner point: safe child-process exited status after the
+                # owned adapter close completed. No command line, no PID.
+                with contextlib.suppress(Exception):
+                    get_diagnostics_hub().record(
+                        EVENT["ADAPTER_EXITED"],
+                        "info",
+                        session=short_id(session_id),
+                        status="exited",
+                    )
                 return True
 
             close_wait = asyncio.create_task(_do_close())
@@ -723,6 +817,10 @@ async def close_session(session_id: str) -> bool:
                 log_event(
                     logger, logging.INFO, "assistant_session_closed", session=short_id(session_id)
                 )
+        # Exact owner point: counts recorded right after the close transition
+        # (tombstone removed). Bounded ints only.
+        with contextlib.suppress(Exception):
+            await _record_counts_event()
         return result
 
 
@@ -762,6 +860,10 @@ async def cleanup_all() -> None:
         entry.state = "closed"
     async with _sessions_lock:
         _shutting_down = False
+    # Exact owner point: counts after the shutdown close transition. Must run
+    # outside the registry lock - _record_counts_event acquires it itself.
+    with contextlib.suppress(Exception):
+        await _record_counts_event()
     log_event(logger, logging.INFO, "assistant_sessions_cleaned")
 
 

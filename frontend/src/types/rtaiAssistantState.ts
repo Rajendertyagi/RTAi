@@ -148,5 +148,8 @@ export type RtaiDiagnosticEvent = {
   // Only JSON-safe scalar fields are ever present (see backend
   // DiagnosticsRecorder); an open index keeps the varied safe fields while
   // staying assignable to assistant-stream's ReadonlyJSONValue.
+  // `seq` is the stable, monotonic event id assigned by the ONE backend
+  // diagnostics hub; it reaches this type through the open index signature and
+  // is used by the Logs panel to dedupe hub events seen through two views.
   [key: string]: string | number | boolean | null;
 };
