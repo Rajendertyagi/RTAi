@@ -16,6 +16,7 @@ import { Copy, Check, RotateCw, FileDown } from "lucide-react";
 // Official Assistant UI Elements (registry-copied at immutable commit
 // b6e7ab88b5e6e60866695d31a08adc3a80f449ff, pinned to @assistant-ui/react@0.15.17).
 import {
+  Reasoning,
   ReasoningRoot,
   ReasoningTrigger,
   ReasoningContent,
@@ -223,6 +224,11 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
               indicator="never"
             >
               {({ part, children }) => {
+                // Official leaf renderer: each reasoning leaf part carries its
+                // streamed text in the part context; <Reasoning /> reads it
+                // from there (pinned GroupedParts contract — leaves render
+                // the part directly).
+                if (part.type === "reasoning") return <Reasoning />;
                 if (part.type !== "group-reasoning") return null;
                 const running = part.status.type === "running";
                 return (
