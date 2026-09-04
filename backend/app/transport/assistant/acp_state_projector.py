@@ -688,12 +688,12 @@ class AcpStateProjector:
             return
         try:
             part = parts[tool_idx]
-            if not isinstance(part, dict):
-                return
             approval = part.get("approval")
-            if not isinstance(approval, dict):
-                approval = {"id": perm.permission_id}
-                part["approval"] = approval
+            if approval is None:
+                part["approval"] = {"id": perm.permission_id}
+                # Re-read through the proxy so the writes below emit real state
+                # operations (mutating a locally created plain dict would not).
+                approval = part.get("approval")
             if perm.resolution == "expired":
                 approval["resolution"] = "expired"
                 approval["reason"] = _EXPIRED_REASON
@@ -708,13 +708,15 @@ class AcpStateProjector:
                 approval["approved"] = kind in ("allow-once", "allow-always")
                 self._record_diag(EVENT["PERMISSION_RESOLVED"], "info")
         except Exception:
-            return
+            # A genuine projection failure must be diagnosable, never silent.
+            _record_projection_failure(self.diagnostics)
 
     def _attach_approval(self, part, meta, permission_id):
-        if not isinstance(part, dict):
-            return
+        # ``part`` is a dict-valued StateProxy (verified readable by the caller
+        # via _find_tool_part_index); a plain isinstance(…, dict) guard is
+        # always False against the proxy and silently skipped the attachment.
         existing = part.get("approval")
-        if isinstance(existing, dict) and existing.get("approved") is not None:
+        if existing is not None and existing.get("approved") is not None:
             return
         approval = {"id": permission_id, "options": meta["options"]}
         if not meta["options"]:
@@ -722,26 +724,30 @@ class AcpStateProjector:
         part["approval"] = approval
     def _attach_pending_permission(self, parts, idx, tool_call_id):
         registry = self.permission_registry
-        if registry is None or not isinstance(parts, list) or idx < 0 or idx >= len(parts):
+        # ``parts`` is a list-valued StateProxy from the tool_start path;
+        # len()/indexing are proxy-safe, isinstance(…, list) never is.
+        if registry is None or idx < 0 or idx >= len(parts):
             return
-        perm = registry.get_by_tool_call_id(tool_call_id)
-        if perm is None or perm.resolution is not None:
-            return
-        part = parts[idx]
-        if not isinstance(part, dict):
-            return
-        existing = part.get("approval")
-        if isinstance(existing, dict) and existing.get("approved") is not None:
-            return
-        # Reconstruct minimal approval options (id + kind) from the registry's
-        # stored option kinds; labels/descriptions are not retained in the
-        # registry but id + kind is sufficient for the single REST POST path.
-        options = [{"id": oid, "kind": okind} for oid, okind in perm.option_kinds.items()]
-        approval = {"id": perm.permission_id, "options": options}
-        if not options:
-            approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
-        part["approval"] = approval
-        self._record_diag(EVENT["PERMISSION_CORRELATED"], "info")
+        try:
+            perm = registry.get_by_tool_call_id(tool_call_id)
+            if perm is None or perm.resolution is not None:
+                return
+            part = parts[idx]
+            existing = part.get("approval")
+            if existing is not None and existing.get("approved") is not None:
+                return
+            # Reconstruct minimal approval options (id + kind) from the registry's
+            # stored option kinds; labels/descriptions are not retained in the
+            # registry but id + kind is sufficient for the single REST POST path.
+            options = [{"id": oid, "kind": okind} for oid, okind in perm.option_kinds.items()]
+            approval = {"id": perm.permission_id, "options": options}
+            if not options:
+                approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
+            part["approval"] = approval
+            self._record_diag(EVENT["PERMISSION_CORRELATED"], "info")
+        except Exception:
+            # A genuine projection failure must be diagnosable, never silent.
+            _record_projection_failure(self.diagnostics)
     def _record_diag(self, event: str, level: str = "info", **fields: Any) -> None:
         """Record a safe diagnostic event if a recorder is linked (no-op otherwise)."""
         rec = self.diagnostics
@@ -993,8 +999,13 @@ class AcpStateProjector:
                 state = self.controller.state
                 if state is None:
                     return
+                # Proxy-safe access (same pattern as the working tool_start
+                # path): state["messages"] is a list-valued StateProxy, so
+                # plain isinstance(…, list/dict) guards are always False and
+                # silently skipped the whole attachment. len()/indexing/.get()
+                # all work through the proxy and emit valid state operations.
                 messages = state["messages"]
-                if not isinstance(messages, list) or not messages:
+                if not len(messages):
                     return
                 idx = len(messages) - 1
                 parts = messages[idx]["parts"]
@@ -1017,11 +1028,9 @@ class AcpStateProjector:
                 if tool_idx is None:
                     return
                 part = parts[tool_idx]
-                if not isinstance(part, dict):
-                    return
                 # Do not overwrite an already-resolved approval (approved is set).
                 existing = part.get("approval")
-                if isinstance(existing, dict) and existing.get("approved") is not None:
+                if existing is not None and existing.get("approved") is not None:
                     return
                 self._attach_approval(part, meta, permission_id)
                 self._record_diag(
@@ -1030,7 +1039,8 @@ class AcpStateProjector:
                     options=len(meta["options"]),
                 )
             except Exception:
-                pass
+                # A genuine projection failure must be diagnosable, never silent.
+                _record_projection_failure(self.diagnostics)
             return
 
         if etype == "done":
@@ -1073,21 +1083,25 @@ class AcpStateProjector:
             if state is None:
                 return False
             messages = state["messages"]
-            for message in messages:
-                parts = message.get("parts") if isinstance(message, dict) else None
-                if not isinstance(parts, list):
+            # Index-based proxy access: iterating a list StateProxy yields the
+            # raw underlying objects, whose mutation would bypass operation
+            # emission. Every write below goes through the proxy and streams.
+            for i in range(len(messages)):
+                parts = messages[i].get("parts")
+                if parts is None:
                     continue
-                for part in parts:
-                    if not isinstance(part, dict) or part.get("type") != "tool-call":
+                for j in range(len(parts)):
+                    part = parts[j]
+                    if part.get("type") != "tool-call":
                         continue
                     approval = part.get("approval")
-                    if not isinstance(approval, dict):
-                        continue
-                    if approval.get("id") != permission_id:
+                    if approval is None or approval.get("id") != permission_id:
                         continue
                     approval["optionId"] = option_id
                     approval["approved"] = approved
                     return True
             return False
         except Exception:
+            # A genuine projection failure must be diagnosable, never silent.
+            _record_projection_failure(self.diagnostics)
             return False
