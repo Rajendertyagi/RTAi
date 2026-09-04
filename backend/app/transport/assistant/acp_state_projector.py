@@ -81,48 +81,91 @@ def _ensure_assistant_message(controller: RunController) -> int:
     return length - 1
 
 
-def _append_text_to_assistant(controller: RunController, delta: str, *, kind: str) -> None:
-    """Stream a text or reasoning delta into the assistant message."""
+def _find_part_index(parts: Any, part_type: str) -> int | None:
+    """Index of the first part whose ``type`` matches, if any (proxy-safe)."""
+    try:
+        n = len(parts)  # type: ignore[arg-type]
+    except Exception:
+        return None
+    for i in range(n):  # type: ignore[arg-type]
+        try:
+            if parts[i]["type"] == part_type:  # type: ignore[index]
+                return i
+        except Exception:
+            continue
+    return None
+
+
+def _record_projection_failure(recorder: Any | None) -> None:
+    """Record ONE safe diagnostic for a genuine state-projection write failure.
+
+    Fixed tokens only (existing event name, fixed reason/status tokens, fixed
+    boolean): never prompt text, paths, ids, tool data, model values, stack
+    traces, or raw exception text. Best-effort by design: a diagnostics failure
+    must never break the projection path (no recursive diagnostics failure).
+    """
+    if recorder is None:
+        return
+    with contextlib.suppress(Exception):
+        recorder.record(
+            EVENT["STATE_PROJECTION_FAILED"],
+            "error",
+            reason="state_write_failed",
+            handled=True,
+        )
+
+
+def _append_text_to_assistant(
+    controller: RunController,
+    delta: str,
+    *,
+    kind: str,
+    recorder: Any | None = None,
+) -> None:
+    """Stream a text or reasoning delta into the assistant message.
+
+    Emits ONLY operations the pinned strict browser accumulator can apply:
+    ``set`` at existing-or-append indices and ``append-text`` whose target
+    string already exists in browser state. Reasoning parts are created with
+    ONE supported ``set`` of the whole parts array (typed reasoning part at
+    the front, preserving intended reasoning-before-text order) BEFORE the
+    first ``append-text`` targets it. Never ``insert`` (unsupported by the
+    StateProxy) and never a write to a part index that does not exist yet.
+    """
     if not delta:
         return
-    idx = _ensure_assistant_message(controller)
-    state = controller.state
-    if state is None:
-        return
-    messages = state["messages"]  # type: ignore[index]
-    if kind == "reasoning":
-        try:
-            parts = messages[idx]["parts"]  # type: ignore[index]
-            found = None
-            for i in range(len(parts)):  # type: ignore[arg-type]
-                try:
-                    if parts[i]["type"] == "reasoning":  # type: ignore[index]
-                        found = i
-                        break
-                except Exception:
-                    continue
+    try:
+        idx = _ensure_assistant_message(controller)
+        state = controller.state
+        if state is None:
+            return
+        messages = state["messages"]  # type: ignore[index]
+        parts = messages[idx]["parts"]  # type: ignore[index]
+        if kind == "reasoning":
+            found = _find_part_index(parts, "reasoning")
             if found is None:
-                parts.insert(0, {"type": "reasoning", "text": ""})  # type: ignore[attr-defined]
+                # Supported creation: one ``set`` replacing the parts array
+                # with the correctly typed reasoning part at the front. The
+                # part exists in browser state before its first delta.
+                existing: list[Any] = [p for p in parts]  # type: ignore[union-attr]
+                messages[idx]["parts"] = [{"type": "reasoning", "text": ""}] + existing  # type: ignore[index]
                 found = 0
-            parts[found]["text"] += delta  # type: ignore[index]
-        except Exception:
-            with contextlib.suppress(Exception):
-                controller.append_state_text(["messages", idx, "parts", 1, "text"], delta)
-    else:
-        try:
-            parts = messages[idx]["parts"]  # type: ignore[index]
-            target = 0
-            for i in range(len(parts)):  # type: ignore[arg-type]
-                try:
-                    if parts[i]["type"] == "text":  # type: ignore[index]
-                        target = i
-                        break
-                except Exception:
-                    continue
+            controller.append_state_text(
+                ["messages", idx, "parts", found, "text"], delta
+            )
+        else:
+            target = _find_part_index(parts, "text")
+            if target is None:
+                # Supported append: StateProxy.append emits ``set`` at the
+                # array's length, which the strict client applier accepts.
+                parts.append({"type": "text", "text": ""})  # type: ignore[union-attr]
+                target = len(parts) - 1  # type: ignore[arg-type]
             parts[target]["text"] += delta  # type: ignore[index]
-        except Exception:
-            with contextlib.suppress(Exception):
-                controller.append_state_text(["messages", idx, "parts", 0, "text"], delta)
+    except Exception:
+        # A genuine state-projection write failure surfaces ONCE as a safe
+        # diagnostic (fixed tokens); the delta is dropped but never silently
+        # degraded into a malformed part.
+        _record_projection_failure(recorder)
 
 
 def _stamp_run_duration(controller: RunController) -> None:
@@ -752,7 +795,7 @@ class AcpStateProjector:
                 if pt == "reasoning":
                     kind = "reasoning"
             self._record_diag(EVENT["PART_DELTA"], "debug", kind=kind)
-            _append_text_to_assistant(self.controller, text, kind=kind)
+            _append_text_to_assistant(self.controller, text, kind=kind, recorder=self.diagnostics)
             return
         if etype == "part_done":
             part_id = event.get("part_id")
