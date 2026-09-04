@@ -262,8 +262,9 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                   return <RtaiToolFallback {...part} />;
                 }
                 if (part.type !== "group-tool") return null;
+                const requiresAction = part.status.type === "requires-action";
                 return (
-                  <ToolGroupRoot variant="ghost">
+                  <ToolGroupRoot variant="ghost" open={requiresAction}>
                     <ToolGroupTrigger
                       count={part.indices.length}
                       active={part.status.type === "running"}
