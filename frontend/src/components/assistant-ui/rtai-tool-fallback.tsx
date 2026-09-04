@@ -17,10 +17,54 @@ import {
   ToolFallbackError,
   ToolFallbackResult,
 } from "./tool-fallback";
+import { CodeDiff, type DiffLine } from "./elements/code-diff";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type BridgeError = { kind: "alert" | "info"; message: string };
+
+type DiffDisplay = {
+  filename: string;
+  additions: number;
+  deletions: number;
+  lines: DiffLine[];
+  cycle: number;
+};
+
+const DIFF_KINDS: readonly string[] = ["context", "added", "removed"];
+
+/**
+ * Detect the backend-derived official CodeDiff payload on a structured diff
+ * result ({type:"diff", path, oldText?, newText?, diff:{…}}). Returns null for
+ * every other result shape so non-diff tools render exactly as before.
+ */
+function readDiffDisplay(result: unknown): DiffDisplay | null {
+  if (result == null || typeof result !== "object") return null;
+  const diff = (result as { diff?: unknown }).diff;
+  if (diff == null || typeof diff !== "object") return null;
+  const d = diff as Record<string, unknown>;
+  if (typeof d.filename !== "string" || d.filename.length === 0) return null;
+  if (typeof d.additions !== "number" || typeof d.deletions !== "number")
+    return null;
+  if (typeof d.cycle !== "number") return null;
+  if (!Array.isArray(d.lines)) return null;
+  const lines: DiffLine[] = [];
+  for (const line of d.lines) {
+    if (line == null || typeof line !== "object") return null;
+    const kind = (line as { kind?: unknown }).kind;
+    const text = (line as { text?: unknown }).text;
+    if (typeof text !== "string") return null;
+    if (typeof kind !== "string" || !DIFF_KINDS.includes(kind)) return null;
+    lines.push({ kind: kind as DiffLine["kind"], text });
+  }
+  return {
+    filename: d.filename,
+    additions: d.additions,
+    deletions: d.deletions,
+    lines,
+    cycle: d.cycle,
+  };
+}
 
 /**
  * Thin RTAI transport bridge for tool approvals.
@@ -176,15 +220,17 @@ export function RtaiToolFallback(props: ToolCallMessagePartProps) {
     [sessionId, approval],
   );
 
-  // No approval at all: render the official ToolFallback completely unchanged.
-  if (!approval) {
-    return <ToolFallback {...props} />;
-  }
+  // Verified structured diff result → official CodeDiff display payload.
+  const diffDisplay = readDiffDisplay(props.result);
+
+  // Approval behavior is the highest priority: declared options and
+  // unsupported options keep the existing official ToolFallback + thin REST
+  // responder exactly as before — a diff payload never alters them.
 
   // Unsupported permission (no real options): never fabricate Allow/Deny.
   // Reuse the official tool header/body and surface the backend-projected safe
   // reason plus the official thread cancellation action only.
-  if (options.length === 0) {
+  if (approval && options.length === 0) {
     const isCancelled =
       props.status?.type === "incomplete" && props.status.reason === "cancelled";
     return (
@@ -224,22 +270,35 @@ export function RtaiToolFallback(props: ToolCallMessagePartProps) {
   // Declared-options path: official ToolFallback presentation + thin REST bridge.
   // The attempt key remounts the official component (resetting its internal
   // submitted flag) after a retryable REST failure so its controls re-enable.
-  return (
-    <>
-      <ToolFallback key={attemptKey} {...props} respondToApproval={restResponder} />
-      {bridgeError && (
-        <div
-          role={bridgeError.kind === "alert" ? "alert" : "status"}
-          className={cn(
-            "mt-1 text-xs",
-            bridgeError.kind === "alert"
-              ? "text-destructive font-medium"
-              : "text-muted-foreground",
-          )}
-        >
-          {bridgeError.message}
-        </div>
-      )}
-    </>
-  );
+  if (approval) {
+    return (
+      <>
+        <ToolFallback key={attemptKey} {...props} respondToApproval={restResponder} />
+        {bridgeError && (
+          <div
+            role={bridgeError.kind === "alert" ? "alert" : "status"}
+            className={cn(
+              "mt-1 text-xs",
+              bridgeError.kind === "alert"
+                ? "text-destructive font-medium"
+                : "text-muted-foreground",
+            )}
+          >
+            {bridgeError.message}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Completed, non-approval tool call with a verified diff payload: render
+  // only the official CodeDiff — the payload replaces the raw structured
+  // result JSON view; no wrapper, no second card.
+  if (diffDisplay) {
+    return <CodeDiff {...diffDisplay} />;
+  }
+
+  // Every other tool call (running, failed, non-diff, malformed payload):
+  // existing official ToolFallback, unchanged.
+  return <ToolFallback {...props} />;
 }

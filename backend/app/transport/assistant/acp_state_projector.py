@@ -18,6 +18,7 @@ Phase 1 scope extended to tool-call streaming (Phase 2.5):
 from __future__ import annotations
 
 import contextlib
+import difflib
 import json
 import logging
 import time
@@ -331,6 +332,74 @@ def _derive_tool_result(content: Any) -> Any:
         # Single structured (non-text) block: preserve as object.
         return only
     return blocks
+
+
+def _diff_display_payload(block: dict[str, Any]) -> dict[str, Any]:
+    """Derive the official CodeDiff display payload from one raw ACP diff block.
+
+    Pure transport-to-official-component adapter: the raw ACP values
+    (``type``/``path``/``oldText``/``newText``) stay untouched on the block and
+    only a derived ``diff`` display payload is returned for the caller to add.
+    Line comparison uses ``difflib.SequenceMatcher`` so ``replace`` operations
+    stream as the removed lines followed by the added lines (official
+    ``removed``/``added`` kinds), with additions/deletions computed exactly
+    from the emitted lines.
+    """
+    old_text = block.get("oldText")
+    new_text = block.get("newText")
+    old_lines = old_text.splitlines() if isinstance(old_text, str) else []
+    new_lines = new_text.splitlines() if isinstance(new_text, str) else []
+    lines: list[dict[str, str]] = []
+    additions = 0
+    deletions = 0
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for text in old_lines[i1:i2]:
+                lines.append({"kind": "context", "text": text})
+        elif tag == "delete":
+            for text in old_lines[i1:i2]:
+                lines.append({"kind": "removed", "text": text})
+                deletions += 1
+        elif tag == "insert":
+            for text in new_lines[j1:j2]:
+                lines.append({"kind": "added", "text": text})
+                additions += 1
+        elif tag == "replace":
+            for text in old_lines[i1:i2]:
+                lines.append({"kind": "removed", "text": text})
+                deletions += 1
+            for text in new_lines[j1:j2]:
+                lines.append({"kind": "added", "text": text})
+                additions += 1
+    path = block.get("path")
+    return {
+        "filename": path if isinstance(path, str) and path else "(unnamed file)",
+        "additions": additions,
+        "deletions": deletions,
+        "lines": lines,
+        "cycle": 0,
+    }
+
+
+def _attach_diff_display(result: Any) -> None:
+    """Add the derived CodeDiff payload alongside raw ACP diff results.
+
+    Operates in place on the structured result produced by
+    ``_derive_tool_result``: a single diff block (object) or any diff blocks
+    inside a multi-block list gain a ``diff`` display payload; every other
+    result shape is left untouched. Raw ACP values are never altered.
+    """
+    if isinstance(result, dict):
+        targets = [result]
+    elif isinstance(result, list):
+        targets = [b for b in result if isinstance(b, dict)]
+    else:
+        return
+    for block in targets:
+        if block.get("type") != "diff" or "diff" in block:
+            continue
+        block["diff"] = _diff_display_payload(block)
 
 
 def _derive_tool_name(event: dict[str, Any]) -> str:
@@ -922,6 +991,9 @@ class AcpStateProjector:
                     # Honest terminal fallback keeps result defined without
                     # inventing content. No credentials/metadata are logged.
                     result = f"Tool {status_norm}" if is_error else "<no result>"
+            # Raw ACP diff results gain the derived official CodeDiff display
+            # payload alongside their preserved raw values (adapter only).
+            _attach_diff_display(result)
 
             try:
                 state = self.controller.state
@@ -945,6 +1017,8 @@ class AcpStateProjector:
                     }
                     if is_error:
                         tool_part["isError"] = True
+                        # Official pinned tool-call status for a failed tool.
+                        tool_part["status"] = {"type": "incomplete", "reason": "error"}
                     parts.append(tool_part)  # type: ignore[attr-defined]
                     tool_idx = len(parts) - 1
                 else:
@@ -952,6 +1026,8 @@ class AcpStateProjector:
                     part["result"] = result  # type: ignore[index]
                     if is_error:
                         part["isError"] = True  # type: ignore[index]
+                        # Official pinned tool-call status for a failed tool.
+                        part["status"] = {"type": "incomplete", "reason": "error"}  # type: ignore[index]
                     else:
                         # Successful status must not be flagged as an error.
                         if part.get("isError"):  # type: ignore[union-attr]
