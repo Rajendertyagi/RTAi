@@ -228,7 +228,7 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                 // streamed text in the part context; <Reasoning /> reads it
                 // from there (pinned GroupedParts contract — leaves render
                 // the part directly).
-                if (part.type === "reasoning") return <Reasoning />;
+                if (part.type === "reasoning") return <Reasoning {...part} />;
                 if (part.type !== "group-reasoning") return null;
                 const running = part.status.type === "running";
                 return (
