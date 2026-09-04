@@ -31,7 +31,7 @@ from ...agents.prompt_content import (
     submit_prompt_blocks,
 )
 from ...logging_config import log_event, short_id
-from ...diagnostics import EVENT
+from ...diagnostics import EVENT, get_diagnostics_hub
 from .acp_state_projector import (
     _EXPIRED_REASON,
     AcpStateProjector,
@@ -143,16 +143,33 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
         )
 
     # Session identity: state.sessionId → threadId → new UUID (no "default" fallback)
+    # Identity evidence capture (booleans only, never the id value): read what
+    # the POST actually carried BEFORE ensure_state_shape mutates state in place.
+    _raw_state = parsed.state if isinstance(parsed.state, dict) else {}
+    _raw_sid = _raw_state.get("sessionId")
+    _raw_tid = parsed.threadId
+    _sid_ok = isinstance(_raw_sid, str) and bool(_raw_sid.strip())
+    _tid_ok = isinstance(_raw_tid, str) and bool(_raw_tid.strip())
+    with contextlib.suppress(Exception):
+        get_diagnostics_hub().record(
+            EVENT["SESSION_IDENTITY"],
+            "info",
+            sessionIdPresent=_sid_ok,
+            threadIdPresent=_tid_ok,
+            isNew=(not _sid_ok) and (not _tid_ok),
+        )
     initial_state, session_key, _is_new = ensure_state_shape(
         parsed.state, thread_id=parsed.threadId
     )
     if not _is_new:
-        # Reused session: record the safe lifecycle event against its recorder.
+        # Reused session: emit exactly one safe lifecycle event. Recorded to the
+        # single global hub directly (not via a per-session recorder lookup, and
+        # with no session/id field) so it fires on every reuse resolution. The
+        # previous path depended on get_entry_any() returning a live recorder and
+        # was silently skipped when that lookup missed, so session.reused never
+        # reached the Logs. Only safe scalar fields are emitted (no id of any form).
         with contextlib.suppress(Exception):
-            _entry = get_entry_any(session_key)
-            _diag = getattr(_entry, "diagnostics", None)
-            if _diag is not None:
-                _diag.record(EVENT["SESSION_REUSED"], "info", session=short_id(session_key))
+            get_diagnostics_hub().record(EVENT["SESSION_REUSED"], "info")
 
     # === Pre-stream validation (before DataStreamResponse) ===
     # Simulate commands against a temporary message list to validate parentId,
@@ -187,7 +204,7 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
             with contextlib.suppress(Exception):
                 _diag = getattr(entry_any, "diagnostics", None)
                 if _diag is not None:
-                    _diag.record(EVENT["TRANSPORT_UNAVAILABLE"], "warn", session=short_id(session_key))
+                    _diag.record(EVENT["TRANSPORT_UNAVAILABLE"], "warn")
             raise HTTPException(
                 status_code=409, detail={"error": "session_closing", "sessionId": session_key}
             )
@@ -233,13 +250,16 @@ async def assistant_transport(request: Request) -> DataStreamResponse:
             if controller.state is None:
                 controller.state = initial_state  # type: ignore[assignment]
             else:
-                # Reconcile if client sent different snapshot (should not happen after generation)
-                try:
-                    existing_sid = controller.state["sessionId"]  # type: ignore[index]
-                    if existing_sid != session_key:
-                        controller.state["sessionId"] = session_key  # type: ignore[index]
-                except Exception:
-                    controller.state["sessionId"] = session_key  # type: ignore[index]
+                # Root-cause fix (same-tab reload reused nothing): ALWAYS emit the
+                # authoritative sessionId as a state op. create_run only seeds the
+                # SERVER-side manager with initial_state, so the previous equality
+                # guard compared the manager's value against itself and the minted
+                # id never reached the wire. The client's state accumulator seeds
+                # from ITS OWN initialState (per-tab sessionStorage may be empty),
+                # so the resolved id must be STREAMED for SessionIdStorageSync to
+                # persist it. The client-side storage write dedupes by value, so
+                # reuse runs are no-ops there.
+                controller.state["sessionId"] = session_key  # type: ignore[index]
         except Exception:
             pass
 
@@ -721,7 +741,7 @@ async def respond_assistant_permission(
     entry = get_entry_any(sid)
     if entry is not None and getattr(entry, "diagnostics", None) is not None:
         with contextlib.suppress(Exception):
-            entry.diagnostics.record(EVENT["PERMISSION_RESPONSE_RECEIVED"], "info", permission=short_id(pid))
+            entry.diagnostics.record(EVENT["PERMISSION_RESPONSE_RECEIVED"], "info")
     if entry is None:
         raise HTTPException(status_code=404, detail={"error": "unknown_session"})
     if entry.state in ("closing", "closed", "close_failed"):

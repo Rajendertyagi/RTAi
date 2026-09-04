@@ -87,6 +87,14 @@ function readStoredSessionId(): string | null {
 
 function writeStoredSessionId(sessionId: string): void {
   if (typeof window === "undefined") return;
+  // Only authoritative, well-formed UUIDs are ever persisted. sessionStorage has
+  // no separate "valid" flag, so the only safe rule is: never write a value that
+  // fails validation. A malformed, null, empty, or temporary id therefore cannot
+  // overwrite or erase an already-valid stored id (the existing value is left
+  // untouched), preserving durable same-tab reuse across reloads.
+  if (typeof sessionId !== "string" || !RTAI_SESSION_ID_PATTERN.test(sessionId)) {
+    return;
+  }
   try {
     if (window.sessionStorage.getItem(RTAI_SESSION_STORAGE_KEY) !== sessionId) {
       window.sessionStorage.setItem(RTAI_SESSION_STORAGE_KEY, sessionId);

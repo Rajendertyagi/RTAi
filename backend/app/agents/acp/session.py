@@ -188,7 +188,7 @@ class AcpSession(AgentAdapter):
                 ),
             )
             self._session_id = session.session_id
-            self._record_diag(EVENT["SESSION_RESOLVED"], "info", session=short_id(self._session_id))
+            self._record_diag(EVENT["SESSION_RESOLVED"], "info")
             self._initialized = True
             self._owned.attach_session(self._session_id or "")
             log_event(
@@ -229,7 +229,7 @@ class AcpSession(AgentAdapter):
         # it. The ACP prompt request carries no model field, so the effective
         # model depends entirely on the session config applied here through the
         # single authorized set_config_option path (the same path select() uses).
-        self._record_diag(EVENT["PROMPT_STARTED"], "info", session=short_id(self._session_id), text_length=len(text))
+        self._record_diag(EVENT["PROMPT_STARTED"], "info", text_length=len(text))
         try:
             await self._connection.prompt(
                 session_id=self._session_id,
@@ -243,9 +243,9 @@ class AcpSession(AgentAdapter):
             )
             await self._close_open_part()
             await self._send({"type": "done"})
-            self._record_diag(EVENT["PROMPT_COMPLETED"], "info", session=short_id(self._session_id))
+            self._record_diag(EVENT["PROMPT_COMPLETED"], "info")
         except Exception:
-            self._record_diag(EVENT["PROMPT_FAILED"], "error", session=short_id(self._session_id))
+            self._record_diag(EVENT["PROMPT_FAILED"], "error")
             raise
 
     async def submit_prompt_content(self, content: list[PromptContent]) -> None:
@@ -264,7 +264,7 @@ class AcpSession(AgentAdapter):
         caps = self._capabilities
         # Validate RTAI safety limits before any SDK interaction.
         validate_prompt_limits(content)
-        self._record_diag(EVENT["PROMPT_STARTED"], "info", session=short_id(self._session_id))
+        self._record_diag(EVENT["PROMPT_STARTED"], "info")
 
         # Check capability support for each block kind — reject entirely on
         # first unsupported kind rather than silently dropping or downgrading.
@@ -418,10 +418,7 @@ class AcpSession(AgentAdapter):
             return False
         if not fut.cancelled():
             fut.set_result(option_id)
-        self._record_diag(
-            EVENT["PERMISSION_RESPONDED"], "info",
-            permission=short_id(permission_request_id), option=short_id(option_id),
-        )
+        self._record_diag(EVENT["PERMISSION_RESPONDED"], "info")
         log_event(
             logger,
             logging.DEBUG,

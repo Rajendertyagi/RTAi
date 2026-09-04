@@ -495,13 +495,12 @@ async def get_or_create_adapter(
             _creation_tasks[session_key] = wait_task
             wait_task.add_done_callback(functools.partial(_on_creation_task_done, session_key))
             # Exact owner point: adapter/session creation REQUESTED (single-flight
-            # registration). Lifecycle events enter the ONE central diagnostics
-            # hub, tagged with the short session correlation id only.
+            # registration). Lifecycle events enter the ONE central diagnostics hub
+            # with safe scalar fields only — never a session/correlation id.
             with contextlib.suppress(Exception):
                 get_diagnostics_hub().record(
                     EVENT["ADAPTER_CREATION_REQUESTED"],
                     "info",
-                    session=short_id(session_key),
                 )
 
     # 2) Await the (possibly shared) creation task OUTSIDE the registry lock. The
@@ -537,10 +536,10 @@ async def _create_adapter_task(
         # recorder) linked to the adapter, the dispatch, and the session entry so
         # every prompt/tool/permission/lifecycle event lands in the ONE hub.
         rec = SessionDiagnosticsRecorder(short_id(session_key))
-        # Session-tagged creation event into the central hub (single owner point:
-        # "session created / adapter provisioning started").
+        # Session creation event into the central hub (single owner point:
+        # "session created / adapter provisioning started"). No session/id field.
         with contextlib.suppress(Exception):
-            rec.record(EVENT["SESSION_CREATED"], "info", session=short_id(session_key))
+            rec.record(EVENT["SESSION_CREATED"], "info")
         # Link the session diagnostics recorder to the adapter so adapter-level
         # events (config option, prompt, permission response) are recorded.
         adapter.diag = rec
@@ -560,13 +559,13 @@ async def _create_adapter_task(
         with contextlib.suppress(Exception):
             rec.record(EVENT["ADAPTER_SPAWNED"], "info", status="spawned")
         with contextlib.suppress(Exception):
-            rec.record(EVENT["ADAPTER_READY"], "info", session=short_id(session_key))
+            rec.record(EVENT["ADAPTER_READY"], "info")
     except BaseException:
         # Startup failed after spawn: ensure any owned child is torn down and no
         # broken session entry lingers.
         if "rec" in dir():
             with contextlib.suppress(Exception):
-                rec.record(EVENT["ADAPTER_UNAVAILABLE"], "error", session=short_id(session_key))
+                rec.record(EVENT["ADAPTER_UNAVAILABLE"], "error")
         if adapter is not None:
             with contextlib.suppress(Exception):
                 await adapter.close()
@@ -710,7 +709,7 @@ async def close_session(session_id: str) -> bool:
             entry.state = "closing"
             with contextlib.suppress(Exception):
                 if entry.diagnostics is not None:
-                    entry.diagnostics.record(EVENT["SESSION_CLOSING"], "info", session=short_id(session_id))
+                    entry.diagnostics.record(EVENT["SESSION_CLOSING"], "info")
 
             # Create shared close task
             async def _do_close() -> bool:
@@ -755,7 +754,6 @@ async def close_session(session_id: str) -> bool:
                     get_diagnostics_hub().record(
                         EVENT["ADAPTER_EXITED"],
                         "info",
-                        session=short_id(session_id),
                         status="exited",
                     )
                 return True
@@ -891,6 +889,17 @@ async def _idle_cleanup_loop() -> None:
                         continue
                     if now - entry.last_activity > timeout:
                         expired.append(sid)
+            if expired:
+                # Distinct, safe observability event for idle cleanup closure.
+                # Only status/reason/counts — never a session id, path, prompt,
+                # model, tool data, exception, or secret.
+                with contextlib.suppress(Exception):
+                    get_diagnostics_hub().record(
+                        EVENT["SESSION_IDLE_EXPIRED"],
+                        "info",
+                        reason="idle_timeout",
+                        expiredCount=len(expired),
+                    )
             for sid in expired:
                 log_event(
                     logger, logging.INFO, "assistant_session_idle_expired", session=short_id(sid)

@@ -351,9 +351,9 @@ export function DiagnosticsPanel({
       <p className="px-4 py-2 text-[11px] text-muted-foreground">
         Sensitive conversation content, file paths, tool args/results, credentials,
         and secrets are intentionally excluded. Events contain only timestamps, stable
-        event names, levels, short correlation ids, and safe scalar counts. The backend
-        retains the most recent 200 events; the system snapshot is fetched once when
-        this page opens and only via Refresh after that.
+        event names, levels, safe booleans, fixed status values, and bounded counts.
+        The backend retains the most recent 200 events; the system snapshot is fetched
+        once when this page opens and only via Refresh after that.
       </p>
 
       <div ref={scrollRef} className="flex-1 overflow-auto px-4 pb-6 font-mono text-[13px]">

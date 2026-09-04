@@ -49,6 +49,15 @@ EVENT = {
     "STREAM_FAILED": "stream.failed",
     "SESSION_CLOSED": "session.closed",
     "SESSION_REUSED": "session.reused",
+    # Distinct idle-cleanup closure event emitted by the backend idle reaper the
+    # moment it selects one or more sessions for closure. Carries only safe
+    # metadata (reason + a bounded count) — never a session id (shortened or
+    # otherwise), path, prompt, model, tool data, exception, or secret.
+    "SESSION_IDLE_EXPIRED": "session.idle_expired",
+    # Boolean-only identity evidence for every POST /assistant: what the client
+    # actually sent (state/sessionId/threadId presence) and the resolver outcome
+    # (isNew). Never carries the id value itself.
+    "SESSION_IDENTITY": "session.identity",
     "SESSION_CREATED": "session.created",
     "SESSION_CLOSING": "session.closing",
     "TRANSPORT_READY": "transport.ready",
@@ -281,7 +290,10 @@ class SessionDiagnosticsRecorder(DiagnosticsRecorder):
         self._hub = hub if hub is not None else get_diagnostics_hub()
 
     def record(self, event: str, level: str = "info", **fields: Any) -> None:
-        fields.setdefault("session", self._session)
+        # Deliberately does NOT inject a session/correlation id. The Logs page must
+        # never render a shortened id of any kind (session, permission, tool, option,
+        # or otherwise); only safe scalar fields reach the single hub. View
+        # membership stays exact via the bounded ``_seqs`` index, not the id field.
         seq = self._hub.record(event, level, **fields)
         if seq is not None:
             self._seqs.append(seq)

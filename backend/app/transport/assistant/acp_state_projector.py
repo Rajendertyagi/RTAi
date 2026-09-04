@@ -623,7 +623,7 @@ class AcpStateProjector:
                     approval["resolution"] = "expired"
                     approval["reason"] = reason
                     # Keep approved undefined; do NOT set an optionId.
-                    self._record_diag(EVENT["PERMISSION_EXPIRED"], "info", permission=short_id(permission_id))
+                    self._record_diag(EVENT["PERMISSION_EXPIRED"], "info")
                     return True
             return False
         except Exception:
@@ -663,7 +663,7 @@ class AcpStateProjector:
                 kind = perm.option_kinds.get(perm.selected_option_id, "")
                 approval["optionId"] = perm.selected_option_id
                 approval["approved"] = kind in ("allow-once", "allow-always")
-                self._record_diag(EVENT["PERMISSION_RESOLVED"], "info", permission=short_id(permission_id), option=short_id(perm.selected_option_id or ""))
+                self._record_diag(EVENT["PERMISSION_RESOLVED"], "info")
         except Exception:
             return
 
@@ -698,7 +698,7 @@ class AcpStateProjector:
         if not options:
             approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
         part["approval"] = approval
-        self._record_diag(EVENT["PERMISSION_CORRELATED"], "info", permission=short_id(perm.permission_id), tool=short_id(tool_call_id))
+        self._record_diag(EVENT["PERMISSION_CORRELATED"], "info")
     def _record_diag(self, event: str, level: str = "info", **fields: Any) -> None:
         """Record a safe diagnostic event if a recorder is linked (no-op otherwise)."""
         rec = self.diagnostics
@@ -768,7 +768,7 @@ class AcpStateProjector:
                 tool_call_id = event.get("toolCallId")
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 return
-            self._record_diag(EVENT["TOOL_START"], "info", tool=short_id(tool_call_id))
+            self._record_diag(EVENT["TOOL_START"], "info")
             tool_name = _derive_tool_name(event)
             args, args_text = _derive_tool_args(event)
             try:
@@ -806,7 +806,7 @@ class AcpStateProjector:
                 tool_call_id = event.get("toolCallId")
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 return
-            self._record_diag(EVENT["TOOL_UPDATE"], "info", tool=short_id(tool_call_id))
+            self._record_diag(EVENT["TOOL_UPDATE"], "info")
             # Update official mutable fields only if meaningful
             # For tool_update, ACP may contain updated args or content; we handle args only
             raw = event.get("raw_input")
@@ -912,7 +912,7 @@ class AcpStateProjector:
                 # could not be applied before tool_result/done streamed in).
                 with contextlib.suppress(Exception):
                     self._sync_registry_approval(tool_call_id, parts, tool_idx)
-                self._record_diag(EVENT["TOOL_RESULT"], "info", tool=short_id(tool_call_id), error=is_error)
+                self._record_diag(EVENT["TOOL_RESULT"], "info", error=is_error)
             except Exception:
                 pass
             return
@@ -932,8 +932,6 @@ class AcpStateProjector:
             self._record_diag(
                 EVENT["PERMISSION_RECEIVED"],
                 "info",
-                permission=short_id(permission_id),
-                tool=short_id(tool_call_id),
                 options=len(meta["options"]),
             )
             unsupported = meta.get("unsupported_kinds") or []
@@ -964,8 +962,6 @@ class AcpStateProjector:
                     self._record_diag(
                         EVENT["PERMISSION_REDELIVERED"],
                         "info",
-                        permission=short_id(permission_id),
-                        tool=short_id(tool_call_id),
                     )
                     return
                 # Correlate ONLY with the exact ACP tool call id. If the matching
@@ -988,8 +984,6 @@ class AcpStateProjector:
                 self._record_diag(
                     EVENT["PERMISSION_ATTACHED"],
                     "info",
-                    permission=short_id(permission_id),
-                    tool=short_id(tool_call_id),
                     options=len(meta["options"]),
                 )
             except Exception:

@@ -12,7 +12,9 @@ import unittest
 from app.diagnostics import (
     EVENT,
     MAX_EVENTS,
+    DiagnosticsHub,
     DiagnosticsRecorder,
+    SessionDiagnosticsRecorder,
 )
 
 
@@ -92,6 +94,41 @@ class DiagnosticsRecorderTests(unittest.IsolatedAsyncioTestCase):
         outside.append({"tamper": True})
         # Internal buffer unaffected by mutating the returned list.
         self.assertEqual(len(rec.snapshot()), 1)
+
+
+class SessionDiagnosticsRecorderTests(unittest.TestCase):
+    """The per-session recorder is a VIEW over the one hub — never an id tagger.
+
+    Locks the Logs-page privacy contract: no session/short correlation id is
+    injected into hub events, while view membership stays exact via seq refs.
+    """
+
+    def test_recorder_never_injects_session_id_into_hub_events(self) -> None:
+        hub = DiagnosticsHub()
+        rec = SessionDiagnosticsRecorder("abc123", hub=hub)
+        rec.record(EVENT["SESSION_REUSED"], "info")
+        snap = hub.snapshot()
+        self.assertEqual(len(snap), 1)
+        self.assertNotIn("session", snap[0])
+
+    def test_recorder_view_membership_survives_without_id_field(self) -> None:
+        hub = DiagnosticsHub()
+        rec = SessionDiagnosticsRecorder("abc123", hub=hub)
+        rec.record(EVENT["SESSION_CREATED"], "info")
+        hub.record(EVENT["APP_READY"], "info")
+        rec.record(EVENT["ADAPTER_READY"], "info")
+        viewed = rec.snapshot()
+        self.assertEqual(
+            [e["event"] for e in viewed],
+            [EVENT["SESSION_CREATED"], EVENT["ADAPTER_READY"]],
+        )
+
+    def test_clear_is_a_no_op_for_global_history(self) -> None:
+        hub = DiagnosticsHub()
+        rec = SessionDiagnosticsRecorder("abc123", hub=hub)
+        rec.record(EVENT["SESSION_CREATED"], "info")
+        rec.clear()
+        self.assertEqual(len(hub.snapshot()), 1)
 
 
 if __name__ == "__main__":

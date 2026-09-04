@@ -79,7 +79,6 @@ def create_client_class() -> type:
                     owner._record_diag(
                         EVENT["PERMISSION_PROTOCOL_ERROR"],
                         "warn",
-                        permission=short_id(perm_id),
                     )
 
                 await owner._send(
@@ -94,7 +93,6 @@ def create_client_class() -> type:
                 owner._record_diag(
                     EVENT["PERMISSION_RECEIVED"],
                     "info",
-                    permission=short_id(perm_id),
                     has_tool_call_id=has_tool_call_id,
                 )
                 log_event(
