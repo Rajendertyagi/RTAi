@@ -106,6 +106,11 @@ EVENT = {
     "ADAPTER_CREATION_REQUESTED": "adapter.creation_requested",
     "ADAPTER_SPAWNED": "adapter.spawned",
     "ADAPTER_EXITED": "adapter.exited",
+    # Safe observability: ACP tool-result and permission projection events.
+    "TOOL_CONTENT_MAPPED":       "tool.content.mapped",
+    "TOOL_RESULT_PROJECTED":     "tool.result.projected",
+    "PERMISSION_PROJECTED":      "permission.projected",
+    "CLIENT_TOOL_GROUP_VISIBILITY": "client.tool_group_visibility",
 }
 
 # Field names that must never reach diagnostics even by mistake.

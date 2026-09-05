@@ -97,6 +97,43 @@ def map_tool_locations(locations: Any) -> list[dict[str, Any]] | None:
     return items or None
 
 
+# Content-kind classification for diagnostic observability. Maps the block
+# types produced by map_tool_content to the safe contentKind enum used in
+# tool.content.mapped diagnostics. Only the "type" key is ever read.
+_CONTENT_KIND_MAP: dict[str, str] = {
+    "content": "text",
+    "diff": "diff",
+    "terminal": "terminal",
+}
+
+
+def classify_content_blocks(
+    blocks: list[dict[str, Any]] | None,
+) -> tuple[str, int]:
+    """Classify mapped content blocks into a safe (contentKind, blockCount) pair.
+
+    contentKind is one of: none, text, diff, terminal, other, mixed.
+    blockCount is bounded by the upstream mapper (map_tool_content already
+    allow-lists types), so the integer is inherently safe.
+
+    Only reads the ``type`` key of each block dict -- never ``text``, ``path``,
+    ``oldText``, ``newText``, ``terminalId``, or any other content field.
+    """
+    if not blocks:
+        return ("none", 0)
+    known: set[str] = set()
+    for block in blocks:
+        if isinstance(block, dict):
+            bt = block.get("type")
+            if isinstance(bt, str) and bt in _CONTENT_KIND_MAP:
+                known.add(_CONTENT_KIND_MAP[bt])
+    if not known:
+        return ("other", len(blocks))
+    if len(known) > 1:
+        return ("mixed", len(blocks))
+    return (next(iter(known)), len(blocks))
+
+
 def permission_option(option: Any) -> dict[str, str] | None:
     """Map one ACP ``PermissionOption`` to a Protocol v1 item.
 

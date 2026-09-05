@@ -84,6 +84,7 @@ _CLIENT_DIAG_EVENT = {
     "model_command_sent": EVENT["CLIENT_MODEL_COMMAND_SENT"],
     "permission_post_initiated": EVENT["CLIENT_PERMISSION_POST_INITIATED"],
     "client_error": EVENT["CLIENT_ERROR"],
+    "tool_group_visibility": EVENT["CLIENT_TOOL_GROUP_VISIBILITY"],
 }
 
 
@@ -106,6 +107,15 @@ def _record_client_diagnostic(controller, adapter, cmd):
     opt = cmd.get("optionLength")
     if isinstance(opt, int):
         fields["optionLength"] = opt
+    status = cmd.get("status")
+    if isinstance(status, str) and status:
+        fields["status"] = status
+    open_val = cmd.get("open")
+    if isinstance(open_val, bool):
+        fields["open"] = open_val
+    tool_count = cmd.get("toolCount")
+    if isinstance(tool_count, int):
+        fields["toolCount"] = tool_count
     _diag_record(adapter, name, "info", **fields)
     _diag_project(controller, adapter)
 

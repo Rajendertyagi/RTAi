@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AuiIf,
   ErrorPrimitive,
@@ -9,6 +9,7 @@ import {
   groupPartByType,
   useAui,
   useAuiState,
+  useAssistantTransportSendCommand,
   type ThreadMessage,
 } from "@assistant-ui/react";
 import { Copy, Check, RotateCw, FileDown } from "lucide-react";
@@ -181,6 +182,42 @@ function MessageFooter({ message }: { message: TimedMessage }) {
   );
 }
 
+/**
+ * Effect-based observer that emits tool-group visibility diagnostics.
+ * Returns null — renders nothing. Placed beside the official ToolGroup
+ * in the render tree so it observes the same group-tool node without
+ * touching ToolGroupRoot, ToolGroupTrigger, ToolGroupContent, grouping,
+ * approval, or open behavior.
+ *
+ * Deduplicates by the (status, open, toolCount) tuple using a ref.
+ */
+function ToolGroupVisibilityObserver({
+  status,
+  toolCount,
+}: {
+  status: string;
+  toolCount: number;
+}) {
+  const sendCommand = useAssistantTransportSendCommand();
+  const requiresAction = status === "requires-action";
+  const prevKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    const key = `${status}:${requiresAction}:${toolCount}`;
+    if (prevKey.current === key) return;
+    prevKey.current = key;
+    sendCommand({
+      type: "rtai.clientDiagnostic",
+      event: "tool_group_visibility",
+      status,
+      open: requiresAction,
+      toolCount,
+    } as Parameters<typeof sendCommand>[0]);
+  }, [status, requiresAction, toolCount, sendCommand]);
+
+  return null;
+}
+
 export function MessageItem({ message }: { message: ThreadMessage }) {
   // Guards are computed unconditionally (rules of hooks) before the role branch.
   const hasReasoning = useAuiState((s) =>
@@ -264,13 +301,19 @@ export function MessageItem({ message }: { message: ThreadMessage }) {
                 if (part.type !== "group-tool") return null;
                 const requiresAction = part.status.type === "requires-action";
                 return (
-                  <ToolGroupRoot variant="ghost" open={requiresAction}>
-                    <ToolGroupTrigger
-                      count={part.indices.length}
-                      active={part.status.type === "running"}
+                  <>
+                    <ToolGroupVisibilityObserver
+                      status={part.status.type}
+                      toolCount={part.indices.length}
                     />
-                    <ToolGroupContent>{children}</ToolGroupContent>
-                  </ToolGroupRoot>
+                    <ToolGroupRoot variant="ghost" open={requiresAction}>
+                      <ToolGroupTrigger
+                        count={part.indices.length}
+                        active={part.status.type === "running"}
+                      />
+                      <ToolGroupContent>{children}</ToolGroupContent>
+                    </ToolGroupRoot>
+                  </>
                 );
               }}
             </MessagePrimitive.GroupedParts>

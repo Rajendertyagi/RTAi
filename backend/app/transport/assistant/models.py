@@ -219,6 +219,7 @@ class RtaiClientDiagnosticCommand(BaseModel):
         "model_command_sent",
         "permission_post_initiated",
         "client_error",
+        "tool_group_visibility",
     ]
     kind: Literal[
         "refresh",
@@ -230,6 +231,11 @@ class RtaiClientDiagnosticCommand(BaseModel):
         "permission",
     ] | None = None
     optionLength: int | None = Field(default=None, ge=0, le=256)
+    status: Literal[
+        "running", "complete", "incomplete", "requires-action", "none",
+    ] | None = None
+    open: bool | None = None
+    toolCount: int | None = Field(default=None, ge=0, le=256)
 
     @model_validator(mode="after")
     def _enforce_option_length_scope(self) -> "RtaiClientDiagnosticCommand":
@@ -239,6 +245,22 @@ class RtaiClientDiagnosticCommand(BaseModel):
             raise ValueError(
                 "optionLength is only allowed for permission_post_initiated"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_tool_group_visibility_fields(self) -> "RtaiClientDiagnosticCommand":
+        # status/open/toolCount are only meaningful for tool_group_visibility;
+        # reject them on every other event so no values leak via them.
+        if self.event == "tool_group_visibility":
+            if self.status is None or self.open is None or self.toolCount is None:
+                raise ValueError(
+                    "status, open, and toolCount are required for tool_group_visibility"
+                )
+        else:
+            if self.status is not None or self.open is not None or self.toolCount is not None:
+                raise ValueError(
+                    "status, open, and toolCount are only allowed for tool_group_visibility"
+                )
         return self
 
 
@@ -341,6 +363,9 @@ def prepare_validated_commands(
                     "event": cmd["event"],
                     "kind": cmd.get("kind"),
                     "optionLength": cmd.get("optionLength"),
+                    "status": cmd.get("status"),
+                    "open": cmd.get("open"),
+                    "toolCount": cmd.get("toolCount"),
                 }
             )
             continue

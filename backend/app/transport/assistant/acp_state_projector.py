@@ -791,6 +791,12 @@ class AcpStateProjector:
         if not meta["options"]:
             approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
         part["approval"] = approval
+        self._record_diag(
+            EVENT["PERMISSION_PROJECTED"], "info",
+            pending=True,
+            hasOptions=bool(meta["options"]),
+            status="requires-action",
+        )
     def _attach_pending_permission(self, parts, idx, tool_call_id):
         registry = self.permission_registry
         # ``parts`` is a list-valued StateProxy from the tool_start path;
@@ -814,6 +820,12 @@ class AcpStateProjector:
                 approval["reason"] = _UNSUPPORTED_PERMISSION_REASON
             part["approval"] = approval
             self._record_diag(EVENT["PERMISSION_CORRELATED"], "info")
+            self._record_diag(
+                EVENT["PERMISSION_PROJECTED"], "info",
+                pending=True,
+                hasOptions=bool(options),
+                status="requires-action",
+            )
         except Exception:
             # A genuine projection failure must be diagnosable, never silent.
             _record_projection_failure(self.diagnostics)
@@ -994,6 +1006,47 @@ class AcpStateProjector:
             # Raw ACP diff results gain the derived official CodeDiff display
             # payload alongside their preserved raw values (adapter only).
             _attach_diff_display(result)
+
+            # Safe observability: classify the derived result without reading
+            # any content values. Only the "type" key and "diff" key presence
+            # are inspected.
+            result_kind = "other"
+            has_code_diff = False
+            if isinstance(result, str):
+                result_kind = "text"
+            elif isinstance(result, dict):
+                bt = result.get("type")
+                if bt in ("content", "text"):
+                    result_kind = "text"
+                elif bt == "diff":
+                    result_kind = "diff"
+                elif bt == "terminal":
+                    result_kind = "terminal"
+                has_code_diff = isinstance(result.get("diff"), dict)
+            elif isinstance(result, list):
+                known_types: set[str] = set()
+                for b in result:
+                    if isinstance(b, dict):
+                        btype = b.get("type")
+                        if btype in ("content", "text"):
+                            known_types.add("text")
+                        elif btype == "diff":
+                            known_types.add("diff")
+                        elif btype == "terminal":
+                            known_types.add("terminal")
+                        if isinstance(b.get("diff"), dict):
+                            has_code_diff = True
+                if len(known_types) == 1:
+                    result_kind = next(iter(known_types))
+                elif len(known_types) > 1:
+                    result_kind = "mixed"
+            self._record_diag(
+                EVENT["TOOL_RESULT_PROJECTED"], "debug",
+                resultKind=result_kind,
+                hasCodeDiff=has_code_diff,
+                isError=is_error,
+                status="incomplete" if is_error else "complete",
+            )
 
             try:
                 state = self.controller.state

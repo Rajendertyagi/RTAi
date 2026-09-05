@@ -50,6 +50,7 @@ from .client import create_client_class
 from ...diagnostics import EVENT
 from .mapping import (
     TERMINAL_STATUSES,
+    classify_content_blocks,
     map_tool_content,
     map_tool_locations,
     map_tool_status,
@@ -667,6 +668,12 @@ class AcpSession(AgentAdapter):
         status = map_tool_status(dumped.get("status"))
         content = map_tool_content(dumped.get("content"))
         locations = map_tool_locations(dumped.get("locations"))
+        content_kind, block_count = classify_content_blocks(content)
+        self._record_diag(
+            EVENT["TOOL_CONTENT_MAPPED"], "debug",
+            contentKind=content_kind,
+            blockCount=block_count,
+        )
 
         if tool_call_id not in self._seen_tool_calls:
             self._seen_tool_calls.add(tool_call_id)

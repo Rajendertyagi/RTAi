@@ -42,7 +42,8 @@ declare module "@assistant-ui/core" {
           | "capability_command_sent"
           | "model_command_sent"
           | "permission_post_initiated"
-          | "client_error";
+          | "client_error"
+          | "tool_group_visibility";
         kind?:
           | "refresh"
           | "agent"
@@ -52,6 +53,9 @@ declare module "@assistant-ui/core" {
           | "transport"
           | "permission";
         optionLength?: number;
+        status?: "running" | "complete" | "incomplete" | "requires-action" | "none";
+        open?: boolean;
+        toolCount?: number;
       };
     }
     interface ExternalState {
