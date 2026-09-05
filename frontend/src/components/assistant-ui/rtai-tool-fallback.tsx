@@ -38,9 +38,12 @@ const DIFF_KINDS: readonly string[] = ["context", "added", "removed"];
  * result ({type:"diff", path, oldText?, newText?, diff:{…}}). Returns null for
  * every other result shape so non-diff tools render exactly as before.
  */
-function readDiffDisplay(result: unknown): DiffDisplay | null {
-  if (result == null || typeof result !== "object") return null;
-  const diff = (result as { diff?: unknown }).diff;
+/**
+ * Strictly validate one unknown `.diff` candidate and return the typed display,
+ * or null when it is not a well-formed CodeDiff payload. Behavior is unchanged
+ * from the prior inline checks.
+ */
+function validateDiffPayload(diff: unknown): DiffDisplay | null {
   if (diff == null || typeof diff !== "object") return null;
   const d = diff as Record<string, unknown>;
   if (typeof d.filename !== "string" || d.filename.length === 0) return null;
@@ -64,6 +67,25 @@ function readDiffDisplay(result: unknown): DiffDisplay | null {
     lines,
     cycle: d.cycle,
   };
+}
+
+function readDiffDisplay(result: unknown): DiffDisplay | null {
+  if (result == null || typeof result !== "object") return null;
+
+  // A mixed tool result arrives as an array whose diff block carries `.diff`;
+  // a simple result carries `.diff` directly. Scan only the array's direct
+  // elements (never recurse into nested objects) and return the first element
+  // whose `.diff` passes strict validation, continuing past malformed ones.
+  if (Array.isArray(result)) {
+    for (const el of result) {
+      if (el == null || typeof el !== "object") continue;
+      const validated = validateDiffPayload((el as { diff?: unknown }).diff);
+      if (validated !== null) return validated;
+    }
+    return null;
+  }
+
+  return validateDiffPayload((result as { diff?: unknown }).diff);
 }
 
 /**
