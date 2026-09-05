@@ -1,6 +1,6 @@
 """Agent adapter boundary.
 
-Application code, the WebSocket layer and the frontend depend on this module -
+Application code and the frontend depend on this module -
 never on a concrete adapter or on the ACP SDK. Concrete adapters (currently
 OpenCode) translate between their provider and the normalized protocol; they
 also own the single child process they spawned via :class:`OwnedProcess`.
@@ -12,12 +12,14 @@ ownership.
 
 from __future__ import annotations
 
-import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from .prompt_content import PromptContent
 
 from .capabilities import CapabilitySnapshot
 from .owned_process import OwnedProcess
@@ -52,6 +54,14 @@ class AgentAdapter(ABC):
         """Send one user prompt; results arrive through the emit sink."""
 
     @abstractmethod
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+        """Send a multi-block prompt with validated attachments.
+
+        Adapters that cannot accept attachments should raise a clear error;
+        callers gate on the advertised attachment capabilities first.
+        """
+
+    @abstractmethod
     async def cancel(self) -> None:
         """Cancel the in-flight generation, if any."""
 
@@ -59,30 +69,20 @@ class AgentAdapter(ABC):
     async def close(self) -> None:
         """Tear down the session and the owned agent process."""
 
+    async def respond_to_permission(self, permission_request_id: str, option_id: str) -> bool:
+        """Resolve a pending permission/HITL request with the user's choice.
+
+        Returns ``True`` when the permission was found and resolved, ``False``
+        otherwise. Adapters that do not implement interactive (HITL) permissions
+        return ``False`` so the transport endpoint can surface an explicit 501
+        instead of guessing. This is the permanent public contract - callers
+        must not reach into adapter internals to resolve permissions.
+        """
+        return False
+
     def owned_process(self) -> OwnedProcess | None:
         """The exact child this adapter spawned, if one exists."""
         return None
 
-    # ------------------------------------------------------------------
-    # Extension points - implemented in Phase 2A-B (runtime discovery and
-    # selection). Deliberately unimplemented here so no phase pretends to
-    # support something the adapter does not actually do yet.
-    # ------------------------------------------------------------------
-
     async def select(self, kind: SelectionKind, value_id: str) -> SelectionResult:
         raise NotImplementedError("Capability selection arrives in Phase 2A-B.")
-
-    async def refresh_capabilities(self) -> CapabilitySnapshot:
-        raise NotImplementedError("Live capability refresh arrives in Phase 2A-B.")
-
-
-async def finish_prompt(adapter: AgentAdapter, text: str, emit: Emit) -> None:
-    """Drive one prompt turn to its normalized terminal event."""
-    try:
-        await adapter.submit_prompt(text)
-        await emit({"type": "done"})
-    except asyncio.CancelledError:
-        await emit({"type": "done", "reason": "cancelled"})
-        raise
-    except Exception as exc:
-        await emit({"type": "error", "message": str(exc)})

@@ -162,7 +162,7 @@ class TestStreamDrop(unittest.IsolatedAsyncioTestCase):
         await adapter._consume_events(_dummy_plan())
 
         types_seen = [e.get("type") for e in emitted]
-        self.assertIn("delta", types_seen)
+        self.assertIn("part_delta", types_seen)
         self.assertIn("done", types_seen)
         self.assertNotIn("error", types_seen)
         self.assertNotIn("stream_dropped", benchmark.failures)

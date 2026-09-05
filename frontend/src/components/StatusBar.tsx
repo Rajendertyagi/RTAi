@@ -1,37 +1,25 @@
 "use client";
 
-import { useAui, useAuiState } from "@assistant-ui/react";
-import { StopCircle } from "lucide-react";
-import { useChatStore } from "../state/chatStore";
+import { useRtaiAssistantState } from "@/hooks/useRtaiAssistantState";
 
+
+// Error-only bar sourced from official AssistantTransport state.
+// No longer references any legacy store or WebSocket status.
 export function StatusBar() {
-  const aui = useAui();
-  const isRunning = useAuiState((s) => s.thread.isRunning);
-  const isConnected = useChatStore((s) => s.connected);
-  const agentInfo = useChatStore((s) => s.agentInfo);
-  const handleCancel = () => aui.thread().cancelRun();
+  const status = useRtaiAssistantState((s) => s.status, "ready");
+  const error = useRtaiAssistantState((s) => s.error, undefined);
+
+  if (status !== "error" || !error) return null;
 
   return (
-    <div className="status-bar--persistent">
-      <span
-        className={`status-dot ${isConnected ? "connected" : "disconnected"} ${isRunning ? "connecting" : ""}`}
-      />
-      <span className="agent-text">{isConnected ? "Ready" : "Disconnected"}</span>
-      <span className="agent-text ml-auto">{agentInfo || "Agent"}</span>
-      {isRunning && (
-        <>
-          <span className="dot-pulse">╬ô├╣├à</span>
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-[var(--interactive-hover)]"
-            aria-label="Stop generation"
-          >
-            <StopCircle className="h-4 w-4" />
-            Stop
-          </button>
-        </>
-      )}
+    <div
+      className="flex h-8 shrink-0 items-center gap-2 border-t border-status-error/30 bg-status-error/5 px-4 text-xs text-status-error"
+      role="alert"
+      aria-live="polite"
+    >
+      <span className="truncate" title={error}>
+        {error}
+      </span>
     </div>
   );
 }

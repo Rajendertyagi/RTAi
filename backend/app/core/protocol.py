@@ -1,7 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class MCPServerConfig:
+    """Configuration for an MCP server to attach to an ACP session.
+
+    The ACP spec passes MCP server definitions at ``session/create`` time.
+    RTAI owns the subprocess lifecycle here: the server is started by the
+    factory and torn down when the adapter closes.
+    """
+
+    name: str
+    command: str
+    args: tuple[str, ...] = field(default_factory=tuple)
+    env: dict[str, str] | None = None
+    cwd: str | None = None
 
 
 def resolve_project_path(value: str | None) -> Path:
@@ -25,16 +42,8 @@ def resolve_project_path(value: str | None) -> Path:
     return resolved
 
 
-def extract_latest_user_text(payload: dict[str, Any]) -> str:
-    """Extract the newest non-empty user message from a Protocol v1 prompt command."""
-    text = payload.get("text")
-    if not isinstance(text, str) or not text.strip():
-        raise ValueError("Expected a 'text' field with non-empty user input")
-    return text.strip()
-
-
 def jsonable_model(value: Any) -> Any:
-    """Convert ACP/Pydantic values into WebSocket-safe JSON data."""
+    """Convert ACP/Pydantic values into JSON-serializable data."""
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", by_alias=True)
     if isinstance(value, dict):
@@ -44,15 +53,6 @@ def jsonable_model(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
-
-
-def text_from_acp_update(update: Any) -> str | None:
-    """Return text only for ACP agent-message chunks."""
-    if type(update).__name__ != "AgentMessageChunk":
-        return None
-    content = getattr(update, "content", None)
-    text = getattr(content, "text", None)
-    return text if isinstance(text, str) else None
 
 
 # ACP content chunk class name -> RTAI part type.

@@ -47,8 +47,13 @@ correlation fields. The frontend mirror of these shapes lives in
    tool activity, permissions). Frames naming a different session than the
    active one must not mutate UI state.
 2. `turn_id` is required on all prompt/generation events. Response-window
-   events (`delta`, `done`, `tool_*`, `cancelled`) apply only when their turn
-   matches the active turn.
+   events (`delta`, `tool_*`) apply only when their turn matches the active
+   turn. Terminal events (`done` including `reason: "cancelled"`, `error`, and
+   the legacy `cancelled`) clear pending state only when **both**
+   `session_id` and `turn_id` match the stable current turn's
+   `sessionId`/`turnId` (pending/active), not only `activeTurnId` — so
+   cancellation works before `user_message` establishes `activeTurnId`; a late
+   terminal event from an older turn is ignored.
 3. `message_id` is required on user and assistant messages.
 4. Streaming events carry an increasing `sequence`; deltas with a sequence ≤
    the last applied one are duplicates and must not append text.
@@ -56,8 +61,54 @@ correlation fields. The frontend mirror of these shapes lives in
 6. Selection state changes come **only** from authoritative selected-state
    events (`*_selected`); `command_result` acknowledgements never mutate
    selections.
-7. Currently `session_id` equals the UI's in-memory session id. Phase 2 may
-   introduce server-assigned ids via a future additive event.
+7. `command_result` correlation uses `request_id`; message storage and
+   deduplication use `message_id`; turn streaming and cancellation use
+   `turn_id`. A cancel `command_result` with `success: false` clears only
+   `cancelPending`/`cancelError` and retains the active prompt state; a
+   successful cancel keeps the turn correlated until its matching terminal
+   `done` arrives.
+
+## Identifier contract
+
+Every identifier has exactly one purpose and is never encoded inside another:
+
+| Identifier | Meaning |
+|---|---|
+| `session_id` | Stable logical conversation identity. Unchanged across every turn in one chat; changes only when New Chat creates another conversation. |
+| `turn_id` | Unique identity for one prompt execution. Generated before prompt dispatch so the turn can be cancelled before the first backend response. |
+| `message_id` | Unique identity for one logical message. Never reused as a command `request_id`. |
+| `request_id` | Unique correlation identity for one protocol command. Prompt and cancel commands receive different request IDs. |
+
+Identifiers are UUIDs generated through a single centralized `generateId()`
+helper backed by `crypto.randomUUID()` in the frontend (`frontend/src/state/chatStore.ts`).
+No call site builds identifiers from `Date.now()` and turn/message identity is
+never appended to `session_id`. Every identity in a prompt — `session_id`
+(stable), `turn_id`, `message_id`, prompt `request_id` — and every cancel's own
+`request_id` is a distinct UUID.
+
+## Conversation session vs. server history id vs. adapter ACP session
+
+Three identities coexist and must not be confused:
+
+- `session_id` — **frontend logical conversation** identity, owned by the UI,
+  UUID via `generateId()`, stable for the whole chat, carried on the wire and
+  used for UI turn correlation (`frontend/src/state/chatStore.ts` + `RtaiRuntimeProvider.tsx`).
+- `rtai_session_id` — **backend history** identity, owned by the server,
+  generated on WebSocket accept, never derived from the client `session_id`,
+  used only as the SQLite transcript key (`GET /api/sessions/...`).
+- ACP `sessionId` — **adapter-native ACP session** identity, owned by the
+  OpenCode ACP/server adapter, created during `initialize`/`new_session` inside
+  `backend/app/agents/acp/session.py`, never exposed on the RTAI wire; the
+  RTAI backend maps its logical `session_id`/`turn_id` envelope to this native
+  `sessionId` only inside the adapter.
+
+No identity is derived from or embedded in another. The UI never sends
+`rtai_session_id` or the adapter's ACP `sessionId`; the backend never uses the
+client `session_id` as a history key nor as the ACP `sessionId`.
+
+## ACP boundary
+
+The official ACP `session/cancel` (https://agentclientprotocol.com/protocol/v1/prompt-turn and /schema) is a **notification containing only `sessionId`**: it cancels whatever work is ongoing for that ACP session and causes the active `session/prompt` to finish with `StopReason::Cancelled`. RTAI's additional wire fields — `request_id`, `turn_id`, `message_id`, and the `command_result` acknowledgement for `cancel` — are **RTAI-specific wrapper features**, not ACP fields. The RTAI backend validates the RTAI `session_id`/`turn_id` envelope first and forwards to the adapter's ACP `cancel()` only when the target matches the exact active RTAI turn; ACP itself has no turn-level identity.
 
 ## Agents
 
@@ -279,6 +330,30 @@ diagnostics).
 UI: finalize bubble, re-enable composer, cancel in-flight tool rows.
 Correlation: turn-scoped.
 
+`done` is the single terminal event for a turn. On cancellation the backend
+emits exactly one `done` with `reason: "cancelled"`; it does not emit a
+separate `cancelled` frame and does not emit a generic handler `error` after a
+successful cancellation.
+
+### suggestions_available
+
+| | |
+|---|---|
+| Direction | backend → ui |
+| Required | `session_id`, `turn_id`, `items`: array of `{title, prompt}` |
+| Optional | envelope extras |
+
+```json
+{"protocol_version": 1, "type": "suggestions_available",
+ "session_id": "session-3", "turn_id": "turn-7",
+ "items": [{"title": "Follow up on X", "prompt": "Tell me more about X"}]}
+```
+
+UI: populate the dynamic suggestions dropdown. One event per turn. The UI
+accepts suggestions whose `turn_id` matches either the active turn or the
+most recently completed turn; older turns are discarded. Not persisted to
+history.
+
 ### tool_start
 
 | | |
@@ -430,7 +505,10 @@ UI: subtle indicators/diagnostics panel only.
  "session_id": "s", "turn_id": "t"}
 ```
 
-UI: mark generation stopped for that turn; other queued turns unaffected.
+Legacy diagnostic frame. It is **not** the terminal event for a cancelled
+turn. The terminal event for cancellation is `done` with
+`reason: "cancelled"` (see below); the backend emits that `done` exactly once
+and does not emit a separate `cancelled` frame for a cancelled turn.
 
 ### warning / error
 
@@ -481,6 +559,11 @@ authoritative.
 | `set_thinking` | `session_id`, `level` | one of the standard levels |
 | `permission_response` | `session_id`, `turn_id`, `permission_request_id`, `option_id` | answers a request |
 
+Every command carries a fresh `request_id` (unique, for `command_result`
+correlation). A prompt and its later cancel are **different commands** and
+therefore receive **different** `request_id` values. The cancel reuses the
+target prompt's `session_id` and `turn_id` but never its `request_id`.
+
 ### prompt example
 
 ```json
@@ -499,13 +582,108 @@ authoritative.
 }
 ```
 
-Attachment references carry metadata only: `id`, `name`, `mime_type`,
-`size_bytes`, optional `kind`. Local filesystem paths, binary data and object
-URLs are forbidden anywhere in protocol events. Phase 1 attachments are
-mock/local-only; real upload transport is future work.
+### prompt — text-only or multi-block
 
-Cancel identifies the exact session and turn; cancelling a non-active turn
-yields a successful no-op acknowledgement.
+The `prompt` command accepts **either** a plain `text` string (legacy path)
+**or** an ordered `prompt` array of content blocks. Both must not be present
+simultaneously. When `prompt` is used, the `text` field is omitted.
+
+```json
+{
+  "protocol_version": 1,
+  "request_id": "req-42",
+  "type": "prompt",
+  "session_id": "session-3",
+  "turn_id": "turn-8",
+  "message_id": "msg-15",
+  "prompt": [
+    {"kind": "text",      "name": "message", "text": "Summarize this"},
+    {"kind": "image",     "name": "diagram.png",
+     "mime_type": "image/png", "data_base64": "..."},
+    {"kind": "resource_link", "name": "report.pdf",
+     "uri": "file:///project/report.pdf",
+     "mime_type": "application/pdf"}
+  ]
+}
+```
+
+#### Block kinds
+
+| `kind` | Required fields | Description |
+|---|---|---|
+| `text` | `name`, `text` | Plain text (always supported) |
+| `image` | `name`, `mime_type`, `data_base64` | Base64-encoded image |
+| `audio` | `name`, `mime_type`, `data_base64` | Base64-encoded audio |
+| `resource_link` | `name`, `uri` | URI reference to external resource |
+| `embedded_text` | `name`, `mime_type`, `text` | Inline text resource |
+| `embedded_blob` | `name`, `mime_type`, `data_base64` | Inline binary resource |
+
+#### Capability gating
+
+Image, audio, and embedded resources are **not** guaranteed available. The
+UI must check the `attachments_available` event emitted at connection time:
+
+```json
+{"type": "attachments_available", "available": true,
+ "block_types": ["resource_link", "image"],
+ "max_item_bytes": 5242880, "max_total_bytes": 10485760, "max_count": 10}
+```
+
+Blocks whose kind is not in `block_types` must not be sent. Text-only prompts
+remain valid even when `attachments_available.available` is `false`.
+
+#### Safety limits
+
+RTAI enforces its own limits independently of the provider:
+
+| Limit | Default | Config |
+|---|---|---|
+| Max bytes per attachment | 5 MiB | `RTAI_ATTACHMENT_MAX_ITEM_BYTES` |
+| Max total bytes per prompt | 10 MiB | `RTAI_ATTACHMENT_MAX_TOTAL_BYTES` |
+| Max block count per prompt | 10 | `RTAI_ATTACHMENT_MAX_COUNT` |
+
+Violations return a normalized `command_result` with `success: false`.
+
+#### Validation rules
+
+- Unknown `kind` values are rejected.
+- Mutually exclusive fields are enforced (e.g. `image` cannot have `text`).
+- Base64 is strictly decoded; invalid encoding returns a client error.
+- `file:` URIs must resolve inside the project root.
+- `https:` URIs are allowed for remote resources.
+- Credentials in URIs are rejected.
+- Filename path traversal (`..`, `/`, `\`) is rejected.
+- MIME types are treated as untrusted metadata; only `image/*` and `audio/*`
+  prefixes are accepted for inline blocks.
+- Raw attachment content is never persisted in history — only kind, name,
+  MIME type, and decoded byte size are stored.
+
+Cancel identifies the exact RTAI turn (`session_id` + `turn_id`) before any
+ACP cancellation is forwarded (see ACP boundary above). Every cancel command
+carries its own fresh `request_id` and receives one correlated
+`command_result` using that `request_id`. The backend:
+
+- forwards to the adapter's ACP `cancel()` **once** only when the cancel targets
+  the exact active RTAI turn (first matching cancel → `success: true`);
+- treats a duplicate cancel for the same already-cancelling turn as an
+  idempotent successful acknowledgement without calling the adapter again;
+- treats a cancel for the exact most-recently terminal turn as a safe
+  successful no-op;
+- rejects honestly with `success: false` (`turn_not_active` / `turn_mismatch`)
+  for a different session, different turn, unknown turn, or no relevant turn,
+  and cancels nothing. Mismatches are never reported as `success: true`.
+
+A successful cancellation terminates with exactly one
+`done {session_id, turn_id, reason: "cancelled"}`; the backend emits no
+separate `cancelled` frame and no generic handler `error` after a successful
+cancellation. The frontend correlates that terminal `done` by matching both the
+stable `sessionId` and the pending/active `turnId` (not only `activeTurnId`,
+so cancellation works before `user_message` establishes `activeTurnId`).
+
+> **Limitation:** only one turn is active per WebSocket. A second prompt while
+> another turn is active is rejected honestly with a failed `command_result`
+> (`"A response is already running"`); it is never silently replaced or
+> cancelled.
 
 ---
 

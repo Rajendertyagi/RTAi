@@ -61,6 +61,13 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 | WebSocket contract tests + mock-agent tests | complete |
 | Structured backend logging (privacy-safe event chain, `RTAI_LOG_LEVEL`) | complete |
 | services/ session orchestration extracted from route handler | planned |
+| Provider-neutral prompt content model (`acp/prompt_content.py`) | complete |
+| ACP attachment negotiation from InitializeResponse promptCapabilities | complete |
+| Protocol v1 `attachments_available` capability event | complete |
+| Multi-block prompt dispatch via `submit_prompt_content` | complete |
+| RTAI safety limits (5 MiB/item, 10 MiB total, 10 blocks) | complete |
+| History redaction for attachment metadata | complete |
+| OpenCode HTTP/server adapter attachment support | deferred — separate task |
 
 ## Phase 3 — Models, modes and diagnostics
 | Feature | Status |
@@ -83,9 +90,17 @@ Statuses: `planned` | `in progress` | `blocked` | `complete`
 ## Phase 5 — SQLite session history
 | Feature | Status |
 |---|---|
-| Storage service behind interface | planned |
+| Storage service behind interface (`history/` repository) | complete |
+| SQLite schema + migrations (WAL, partial native-id index, event dedup) | complete |
+| Persist normalized transcript events (sanitized allowlist, per-session ordinal) | complete |
+| REST read APIs: `GET /api/sessions`, `/api/sessions/{id}`, `/api/sessions/{id}/events` | complete |
+| Session capability state surfaced via `CapabilitySnapshot.sessions` | complete |
 | Session sidebar backed by SQLite | planned |
 | Resume session via AgentAdapter | planned |
+
+> Phase 5 landed backend-only: persistent storage and REST read APIs. The
+> frontend sidebar and native session resume remain planned; native continuation
+> is deferred to a later phase.
 
 ## Phase 6 — Tauri desktop wrapper
 | Feature | Status |

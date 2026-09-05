@@ -8,8 +8,8 @@ Ownership and safety (ADR-0006/0007/0008):
 - The exact child handle is retained in an ``OwnedProcess``; basic-auth
   credentials are handed to the child through environment variables only.
 - Readiness waits for ``GET /global/health`` under a hard wall-clock deadline
-  measured with ``time.monotonic()`` (independent of any injected benchmark
-  clock, so frozen clocks cannot extend or hang startup).
+  measured with ``time.monotonic()`` (a wall-clock deadline,
+  so a frozen clock cannot extend or hang startup).
 - Port allocation is inherently racy (the OS releases the ephemeral port
   before OpenCode binds it): bind/startup failures trigger a bounded retry
   with a freshly allocated port. Cleanup between attempts touches only the
@@ -24,8 +24,8 @@ verified process-group / Windows Job Object strategy exists.
 
 Capability discovery queries only documented endpoints; anything the running
 server does not expose becomes an unavailable section with an exact reason.
-Prompt streaming/cancellation are translated minimally for the later fair
-benchmark - this adapter is NOT wired to the frontend in this phase.
+Prompt streaming/cancellation are translated minimally; this adapter is NOT
+wired to the frontend in this phase.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
+from ...core.protocol import MCPServerConfig
 from ...logging_config import log_event, short_id
 from ..base import AgentAdapter, Emit, SelectionResult
 from ..capabilities import (
@@ -50,6 +51,7 @@ from ..capabilities import (
     UnavailableCapability,
 )
 from ..owned_process import DEFAULT_FORCE_TIMEOUT_SECONDS, OwnedProcess
+from ..prompt_content import PromptContent
 from .capability_mapper import (
     AcpCapabilityState,
     command_item,
@@ -139,22 +141,17 @@ class OpenCodeServerAdapter(AgentAdapter):
         bind_retry_attempts: int = _BIND_RETRY_ATTEMPTS,
         username: str | None = None,
         password: str | None = None,
-        benchmark: Any = None,
     ) -> None:
         self._http: HttpTransport = http or StdlibHttpTransport()
         self._launcher = launcher or StdlibServerLauncher()
         self._opencode_bin = (
-            opencode_bin
-            or os.environ.get("OPENCODE_BIN")
-            or shutil.which("opencode")
-            or ""
+            opencode_bin or os.environ.get("OPENCODE_BIN") or shutil.which("opencode") or ""
         )
         self._ready_timeout = ready_timeout_seconds
         self._poll_interval = poll_interval_seconds
         self._bind_retry_attempts = bind_retry_attempts
         self._username = username or "opencode"
         self._password = password or ""
-        self._benchmark = benchmark
         self._plan: ServerLaunchPlan | None = None
         self._owned: OwnedProcess | None = None
         self._session_id: str | None = None
@@ -177,15 +174,15 @@ class OpenCodeServerAdapter(AgentAdapter):
         self._open_part_kind: str | None = None
         # Tool call ids already announced this turn (first sighting => tool_start).
         self._seen_tool_calls: set[str] = set()
+        # Optional MCP servers to attach at session creation time.
+        self._mcp_servers: list[MCPServerConfig] | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
     async def start(self, cwd: Path, emit: Emit) -> None:
         self._emit = emit
         executable = (
-            self._opencode_bin
-            or os.environ.get("OPENCODE_BIN")
-            or shutil.which("opencode")
+            self._opencode_bin or os.environ.get("OPENCODE_BIN") or shutil.which("opencode")
         )
         if not executable:
             raise RuntimeError("OpenCode was not found in PATH (expected 'opencode')")
@@ -224,8 +221,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                 pid=owned.pid,
                 attempt=attempt + 1,
             )
-            if self._benchmark is not None:
-                self._benchmark.mark("startup")
             try:
                 await self._wait_until_ready(plan, process)
             except ServerStartupError as exc:
@@ -242,16 +237,10 @@ class OpenCodeServerAdapter(AgentAdapter):
                 # and exhausted retries do not.
                 if exc.kind in {"bind_failed", "child_exited"} and attempt < attempts - 1:
                     continue
-                raise RuntimeError(
-                    f"OpenCode server startup failed ({exc.kind}): {exc}"
-                ) from exc
+                raise RuntimeError(f"OpenCode server startup failed ({exc.kind}): {exc}") from exc
 
-            if self._benchmark is not None:
-                self._benchmark.mark("ready")
             try:
                 await self._create_session(cwd)
-                if self._benchmark is not None:
-                    self._benchmark.mark("session_created")
                 await self._discover_capabilities()
                 self._start_event_stream(plan)
                 self._initialized = True
@@ -264,9 +253,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             f"OpenCode server startup failed after {attempts} attempts: {last_error}"
         ) from last_error
 
-    async def _wait_until_ready(
-        self, plan: ServerLaunchPlan, process: Any
-    ) -> None:
+    async def _wait_until_ready(self, plan: ServerLaunchPlan, process: Any) -> None:
         """Hard wall-clock deadline; classifies timeout/auth/child-exit."""
         deadline = time.monotonic() + self._ready_timeout
         while True:
@@ -314,9 +301,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             await asyncio.sleep(self._poll_interval)
 
     async def _create_session(self, cwd: Path) -> None:
-        result = await self._request_json(
-            "POST", "/session", json_body={"title": "RTAI"}
-        )
+        result = await self._request_json("POST", "/session", json_body={"title": "RTAI"})
         session_id = result.get("id") if isinstance(result, dict) else None
         if not isinstance(session_id, str):
             raise RuntimeError("OpenCode server returned no session id")
@@ -349,13 +334,9 @@ class OpenCodeServerAdapter(AgentAdapter):
                 selected = models[0].id
             self._capabilities.selected_model = selected
         else:
-            self._capabilities.models = _missing_section(
-                "GET /config/providers exposed no models"
-            )
+            self._capabilities.models = _missing_section("GET /config/providers exposed no models")
 
-        thinking = self._thinking_section_for(
-            providers, self._capabilities.selected_model
-        )
+        thinking = self._thinking_section_for(providers, self._capabilities.selected_model)
         if not thinking.items and models:
             # Many models (e.g. the free tier) expose an empty `variants` map,
             # which would leave the Thinking control permanently unavailable.
@@ -404,14 +385,7 @@ class OpenCodeServerAdapter(AgentAdapter):
         if isinstance(commands, list) and commands:
             self._capabilities.ingest_commands(commands)
         else:
-            self._capabilities.commands = _missing_section(
-                "GET /command returned no commands"
-            )
-
-        if self._server_version:
-            self._benchmark_runtime_id("server_version", self._server_version)
-        if selected:
-            self._benchmark_runtime_id("model", selected)
+            self._capabilities.commands = _missing_section("GET /command returned no commands")
 
         log_event(
             logger,
@@ -431,18 +405,9 @@ class OpenCodeServerAdapter(AgentAdapter):
         if options:
             from ..capabilities import ThinkingOption
 
-            items = tuple(
-                ThinkingOption(id=str(value), label=label)
-                for value, label in options
-            )
+            items = tuple(ThinkingOption(id=str(value), label=label) for value, label in options)
             return CapabilitySection(items=items)
-        return _missing_section(
-            "The selected model exposes no reasoning variants."
-        )
-
-    def _benchmark_runtime_id(self, key: str, value: str) -> None:
-        if self._benchmark is not None:
-            self._benchmark.set_runtime_id(key, value)
+        return _missing_section("The selected model exposes no reasoning variants.")
 
     # -- prompt / cancel ------------------------------------------------------
 
@@ -463,8 +428,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             session=short_id(self._session_id),
             text_length=len(text),
         )
-        if self._benchmark is not None:
-            self._benchmark.mark("prompt_accepted")
         body: dict[str, Any] = {"parts": [{"type": "text", "text": text}]}
 
         # prompt_async accepts model/agent/variant per request, which is how
@@ -486,6 +449,12 @@ class OpenCodeServerAdapter(AgentAdapter):
         )
         # prompt_async responds 204; streaming arrives via the event stream.
 
+    async def submit_prompt_content(self, content: list[PromptContent]) -> None:
+        # The OpenCode server adapter never advertises attachment support
+        # (attachments are reported as UnavailableCapability), so this path is
+        # unreachable from the frontend. Raise a clear error if invoked anyway.
+        raise NotImplementedError("OpenCode server adapter does not support attachment prompts")
+
     async def cancel(self) -> None:
         if not self._session_id:
             return
@@ -496,8 +465,6 @@ class OpenCodeServerAdapter(AgentAdapter):
             session=short_id(self._session_id),
         )
         await self._request_json("POST", f"/session/{self._session_id}/abort")
-        if self._benchmark is not None:
-            self._benchmark.mark("cancelled")
 
     async def _emit_commands_available(self) -> None:
         """Re-push the runtime command list to the UI.
@@ -515,9 +482,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                 {
                     "type": "commands_available",
                     "available": True,
-                    "commands": [
-                        command_item(c) for c in self._capabilities.commands.items
-                    ],
+                    "commands": [command_item(c) for c in self._capabilities.commands.items],
                 }
             )
 
@@ -533,14 +498,21 @@ class OpenCodeServerAdapter(AgentAdapter):
             "models": self._capabilities.models,
             "modes": self._capabilities.modes,
             "thinking_options": self._capabilities.thinking,
+            "selected": {
+                "agent": self._capabilities.selected_agent,
+                "model": self._capabilities.selected_model,
+                "mode": self._capabilities.selected_mode,
+                "thinking": self._capabilities.selected_thinking,
+            },
             "commands": self._capabilities.commands,
             "attachments": UnavailableCapability(
                 UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER,
                 "The OpenCode server API exposes no attachment size/type limits.",
             ),
             "sessions": UnavailableCapability(
-                UnavailabilityReason.PENDING_DISCOVERY,
-                "Session capability flags require initialize-time negotiation.",
+                UnavailabilityReason.NOT_EXPOSED_BY_PROVIDER,
+                "The OpenCode server API exposes no session list/load/resume "
+                "endpoints; session lifecycle is not available on this adapter.",
             ),
         }
         if self._agents_section is not None:
@@ -599,8 +571,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             kind=resolved,  # type: ignore[arg-type]
             applied=True,
             message=(
-                "Applied to the next prompt "
-                "(the server has no session-level selection endpoint)."
+                "Applied to the next prompt (the server has no session-level selection endpoint)."
             ),
         )
 
@@ -640,9 +611,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             return None
 
     def _start_event_stream(self, plan: ServerLaunchPlan) -> None:
-        self._stream_task = asyncio.get_running_loop().create_task(
-            self._consume_events(plan)
-        )
+        self._stream_task = asyncio.get_running_loop().create_task(self._consume_events(plan))
 
     # -- event stream ------------------------------------------------------------
 
@@ -651,8 +620,8 @@ class OpenCodeServerAdapter(AgentAdapter):
 
         Terminal conditions: adapter ``close()`` (expected, quiet),
         ``server.instance.disposed`` (clean marker; fails an active turn),
-        or unexpected stream end (normalized connection error + failed
-        benchmark). Only ``session.idle`` completes a turn.
+        or unexpected stream end (normalized connection error). Only
+        ``session.idle`` completes a turn.
         """
         url = f"{plan.base_url}/event"
         headers = {**self._headers(), "Accept": "text/event-stream"}
@@ -670,9 +639,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                     payload = {"type": "unknown", "properties": payload}
                 event_type = str(payload.get("type") or "")
                 props = payload.get("properties")
-                properties: dict[str, Any] = (
-                    props if isinstance(props, dict) else {}
-                )
+                properties: dict[str, Any] = props if isinstance(props, dict) else {}
                 log_event(
                     logger,
                     logging.DEBUG,
@@ -695,9 +662,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                         "server_event_normalized",
                         event_type=event_type,
                     )
-                    await self._emit(
-                        {"type": "raw", "event": event_type, "data": properties}
-                    )
+                    await self._emit({"type": "raw", "event": event_type, "data": properties})
         except StreamError as exc:
             # Production transport failures (connect/auth/content-type).
             log_event(
@@ -707,18 +672,12 @@ class OpenCodeServerAdapter(AgentAdapter):
                 kind=exc.kind,
             )
             await self._fail_active_turn(f"event stream {exc.kind}: {exc}")
-            if self._benchmark is not None:
-                self._benchmark.fail(f"stream_{exc.kind}")
 
         # Unexpected end-of-stream without a terminal marker or close():
         # an SSE disconnect must never look like a silent success.
         if not self._closing and not self._completed_emitted:
             log_event(logger, logging.WARNING, "server_stream_terminated")
-            await self._fail_active_turn(
-                "OpenCode event stream terminated unexpectedly"
-            )
-            if self._benchmark is not None:
-                self._benchmark.fail("stream_dropped")
+            await self._fail_active_turn("OpenCode event stream terminated unexpectedly")
         log_event(logger, logging.INFO, "server_sse_closed")
 
     async def _handle_global_event(self, event_type: str, properties: dict[str, Any]) -> bool:
@@ -729,11 +688,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             # Clean SSE terminal marker - but an in-flight prompt fails.
             self._closing = True
             if self._awaiting_idle:
-                await self._fail_active_turn(
-                    "OpenCode server instance was disposed mid-turn"
-                )
-                if self._benchmark is not None:
-                    self._benchmark.fail("stream_dropped")
+                await self._fail_active_turn("OpenCode server instance was disposed mid-turn")
             return True
         if "command" in event_type.lower():
             # Command list changed after session creation - re-push it so the
@@ -748,14 +703,10 @@ class OpenCodeServerAdapter(AgentAdapter):
             return session_id != self._session_id
         return event_type not in {"server.connected", "server.heartbeat"}
 
-    async def _handle_turn_event(
-        self, event_type: str, properties: dict[str, Any]
-    ) -> bool:
+    async def _handle_turn_event(self, event_type: str, properties: dict[str, Any]) -> bool:
         """Returns True when the event was consumed by a turn handler."""
         if self._emit is None:
             return True
-        if self._benchmark is not None:
-            self._benchmark.mark("first_event")
 
         if event_type == "message.part.updated":
             raw_part = properties.get("part")
@@ -772,8 +723,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                 # not streamed content, but they do end an open content part.
                 await self._close_open_part()
                 return True
-            if part_type != "reasoning" and self._benchmark is not None:
-                self._benchmark.mark("first_token")
             await self._emit_content_part(part, properties.get("delta"))
             return True
 
@@ -787,8 +736,6 @@ class OpenCodeServerAdapter(AgentAdapter):
                     "server_session_idle",
                     session=short_id(self._session_id),
                 )
-                if self._benchmark is not None:
-                    self._benchmark.mark("completed")
                 emitter = self._emit
                 if emitter is not None:
                     await self._close_open_part()
@@ -804,15 +751,11 @@ class OpenCodeServerAdapter(AgentAdapter):
                     "server_session_error",
                     session=short_id(self._session_id),
                 )
-                if self._benchmark is not None:
-                    self._benchmark.fail("provider_error")
                 emitter = self._emit
                 if emitter is not None:
                     err_props = properties.get("error")
                     message = (
-                        err_props.get("message")
-                        if isinstance(err_props, dict)
-                        else None
+                        err_props.get("message") if isinstance(err_props, dict) else None
                     ) or "session reported an error"
                     await self._close_open_part()
                     await emitter({"type": "error", "message": str(message)})
@@ -825,8 +768,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             self._error_emitted = True
             await self._close_open_part()
             await self._emit({"type": "error", "message": message})
-        # The caller records the precise benchmark failure reason so a single
-        # drop is never counted twice.
+            # The error-emitted guard ensures a single failure is never reported twice.
 
     async def _close_open_part(self) -> None:
         """Close the open content part, if any."""
@@ -840,10 +782,8 @@ class OpenCodeServerAdapter(AgentAdapter):
     async def _emit_content_part(self, part: dict[str, Any], delta: Any) -> None:
         """Stream a server text/reasoning part as part_start / part_delta events.
 
-        Mirrors the ACP adapter: a new part opens whenever the part id or kind
-        changes, so thinking and reply text become separate parts in true
-        chronological order. The legacy ``delta`` event is kept for text parts
-        until the frontend moves fully to parts.
+        A new part opens whenever the part id or kind changes, so thinking
+        and reply text become separate parts in true chronological order.
         """
         if self._emit is None:
             return
@@ -884,12 +824,7 @@ class OpenCodeServerAdapter(AgentAdapter):
                         "part_type": part_type,
                     }
                 )
-            await self._emit(
-                {"type": "part_delta", "part_id": part_key, "text": chunk}
-            )
-        # Legacy path: only the reply belongs in the concatenated text blob.
-        if part_type == "text":
-            await self._emit({"type": "delta", "text": chunk})
+            await self._emit({"type": "part_delta", "part_id": part_key, "text": chunk})
 
     async def _emit_tool_event(self, part: dict[str, Any]) -> None:
         """Map an OpenCode server tool part to Protocol v1 tool events.
@@ -1002,7 +937,6 @@ def _server_tool_content(output: Any) -> list[dict[str, Any]] | None:
                     blocks.append({"type": "content", "text": text})
         return blocks or None
     return None
-
 
 
 def _section(items: list[Any]) -> CapabilitySection[Any]:

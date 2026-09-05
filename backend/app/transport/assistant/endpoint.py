@@ -1,0 +1,834 @@
+"""POST /assistant — official ``assistant-stream`` transport.
+
+Uses ``create_run`` + ``RunController`` and returns
+``DataStreamResponse``.  The request shape follows the official
+AssistantTransport contract: ``state, commands, system, tools, threadId,
+parentId, callSettings, config``.  No custom envelope is invented.
+
+Official source:
+https://www.assistant-ui.com/docs/runtimes/custom/assistant-transport
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+from typing import Any
+
+# PyPI Python package (backend dependency: assistant-stream==0.0.36), NOT the
+# separate npm assistant-stream@^0.3.40 pulled by @assistant-ui/react on the frontend.
+from assistant_stream import RunController, create_run
+from assistant_stream.serialization import DataStreamResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from ...agents.prompt_content import (
+    PromptValidationError,
+    parse_inline_data_url,
+    submit_prompt_blocks,
+)
+from ...logging_config import log_event, short_id
+from ...diagnostics import EVENT, get_diagnostics_hub
+from .acp_state_projector import (
+    _EXPIRED_REASON,
+    AcpStateProjector,
+    _ensure_assistant_message,
+    _set_status,
+    project_capabilities,
+    project_diagnostics,
+    set_capability_error,
+)
+from .models import (
+    RTAI_REFRESH_COMMAND,
+    RTAI_SELECT_COMMANDS,
+    RTAI_CLIENT_DIAGNOSTIC_COMMAND,
+    AssistantTransportRequest,
+    _find_parent_index,
+    ensure_state_shape,
+    prepare_validated_commands,
+)
+from .session_manager import (
+    close_session,
+    get_entry,
+    get_entry_any,
+    get_or_create_adapter,
+    touch_session,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _diag_record(adapter, event, level="info", **fields):
+    """Record a safe diagnostic on the session recorder (no-op if unavailable)."""
+    rec = getattr(adapter, "diag", None)
+    if rec is not None:
+        rec.record(event, level, **fields)
+
+
+def _diag_project(controller, adapter):
+    """Project the safe diagnostics ring buffer into RunController external state."""
+    rec = getattr(adapter, "diag", None)
+    project_diagnostics(controller, rec)
+
+
+# Server-authored event names for validated client diagnostics. The frontend emits
+# lifecycle moments through the rtai.clientDiagnostic command; the backend records
+# them under a stable `client.<event>` name so they join the SAME Diagnostics
+# stream as server events (no second store, no merge at render time).
+_CLIENT_DIAG_EVENT = {
+    "gate_ready": EVENT["CLIENT_GATE_READY"],
+    "capability_command_sent": EVENT["CLIENT_CAPABILITY_COMMAND_SENT"],
+    "model_command_sent": EVENT["CLIENT_MODEL_COMMAND_SENT"],
+    "permission_post_initiated": EVENT["CLIENT_PERMISSION_POST_INITIATED"],
+    "client_error": EVENT["CLIENT_ERROR"],
+    "tool_group_visibility": EVENT["CLIENT_TOOL_GROUP_VISIBILITY"],
+}
+
+
+def _record_client_diagnostic(controller, adapter, cmd):
+    """Record a validated client diagnostic into the per-session recorder.
+
+    Stored under a stable server-authored name (client.<event>) with origin:"client"
+    so it is honestly attributable inside the single Diagnostics stream the panel
+    renders. Only the validated enum/scalar values are carried; the recorder's
+    sanitizer drops sensitive keys and bounds the ring to 200 events. Projection
+    into controller.state["rtaiDiagnostics"] happens through the normal path.
+    """
+    name = _CLIENT_DIAG_EVENT.get(cmd.get("event"))
+    if name is None:
+        return
+    fields: dict[str, Any] = {"origin": "client"}
+    kind = cmd.get("kind")
+    if isinstance(kind, str) and kind:
+        fields["kind"] = kind
+    opt = cmd.get("optionLength")
+    if isinstance(opt, int):
+        fields["optionLength"] = opt
+    status = cmd.get("status")
+    if isinstance(status, str) and status:
+        fields["status"] = status
+    open_val = cmd.get("open")
+    if isinstance(open_val, bool):
+        fields["open"] = open_val
+    tool_count = cmd.get("toolCount")
+    if isinstance(tool_count, int):
+        fields["toolCount"] = tool_count
+    _diag_record(adapter, name, "info", **fields)
+    _diag_project(controller, adapter)
+
+
+router = APIRouter()
+
+
+@router.post("/assistant")
+async def assistant_transport(request: Request) -> DataStreamResponse:
+    """Handle an AssistantTransport POST.
+
+    Only ``type == "add-message"`` commands with the official shape
+    ``{type, message:{role, parts}, parentId, sourceId}`` are processed.
+    """
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    try:
+        parsed = AssistantTransportRequest.model_validate(body)
+    except Exception:
+        parsed = AssistantTransportRequest(
+            state=body.get("state"),
+            commands=body.get("commands") if isinstance(body.get("commands"), list) else [],
+            system=body.get("system"),
+            tools=body.get("tools"),
+            threadId=body.get("threadId"),
+            parentId=body.get("parentId"),
+            callSettings=body.get("callSettings"),
+            config=body.get("config"),
+        )
+
+    # Session identity: state.sessionId → threadId → new UUID (no "default" fallback)
+    # Identity evidence capture (booleans only, never the id value): read what
+    # the POST actually carried BEFORE ensure_state_shape mutates state in place.
+    _raw_state = parsed.state if isinstance(parsed.state, dict) else {}
+    _raw_sid = _raw_state.get("sessionId")
+    _raw_tid = parsed.threadId
+    _sid_ok = isinstance(_raw_sid, str) and bool(_raw_sid.strip())
+    _tid_ok = isinstance(_raw_tid, str) and bool(_raw_tid.strip())
+    with contextlib.suppress(Exception):
+        get_diagnostics_hub().record(
+            EVENT["SESSION_IDENTITY"],
+            "info",
+            sessionIdPresent=_sid_ok,
+            threadIdPresent=_tid_ok,
+            isNew=(not _sid_ok) and (not _tid_ok),
+        )
+    initial_state, session_key, _is_new = ensure_state_shape(
+        parsed.state, thread_id=parsed.threadId
+    )
+    if not _is_new:
+        # Reused session: emit exactly one safe lifecycle event. Recorded to the
+        # single global hub directly (not via a per-session recorder lookup, and
+        # with no session/id field) so it fires on every reuse resolution. The
+        # previous path depended on get_entry_any() returning a live recorder and
+        # was silently skipped when that lookup missed, so session.reused never
+        # reached the Logs. Only safe scalar fields are emitted (no id of any form).
+        with contextlib.suppress(Exception):
+            get_diagnostics_hub().record(EVENT["SESSION_REUSED"], "info")
+
+    # === Pre-stream validation (before DataStreamResponse) ===
+    # Simulate commands against a temporary message list to validate parentId,
+    # generate stable IDs, and ensure request can return HTTP 400 instead of
+    # streaming an error.  This is the sole validation site; the run callback
+    # applies only already-validated commands and never raises HTTPException.
+    # Also check for closing session to return honest pre-stream 409 instead of
+    # spawning another process.
+    raw_commands = parsed.commands if isinstance(parsed.commands, list) else []
+    try:
+        prepared_commands = prepare_validated_commands(
+            initial_state.get("messages", []),  # type: ignore[arg-type]
+            raw_commands,
+        )
+    except RequestValidationError:
+        # Schema-level violations of custom capability commands (missing/blank/
+        # oversized/alias/extra fields) surface as FastAPI's standard 422.
+        raise
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid_request", "reason": str(exc)}
+        ) from None
+
+    # Prevent creating a replacement adapter while previous is still closing
+    try:
+        from .session_manager import get_entry_any
+
+        entry_any = get_entry_any(session_key)
+        if entry_any is not None and entry_any.state in ("closing", "close_failed"):
+            with contextlib.suppress(Exception):
+                _diag = getattr(entry_any, "diagnostics", None)
+                if _diag is not None:
+                    _diag.record(EVENT["TRANSPORT_UNAVAILABLE"], "warn")
+            raise HTTPException(
+                status_code=409, detail={"error": "session_closing", "sessionId": session_key}
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    log_event(
+        logger,
+        logging.INFO,
+        "assistant_request_received",
+        session=short_id(session_key),
+        has_commands=bool(prepared_commands),
+    )
+
+    # --- DIAGNOSTIC (gated by RTAI_LOG_LEVEL=DEBUG): command TYPE inventory ---
+    # Logs only command type strings (never message text/payloads/credentials).
+    if logger.isEnabledFor(logging.DEBUG):
+        _cmd_types = [
+            (c.get("type") if isinstance(c, dict) else str(type(c)))
+            for c in prepared_commands
+        ]
+        log_event(
+            logger,
+            logging.DEBUG,
+            "assistant_commands",
+            session=short_id(session_key),
+            count=len(prepared_commands),
+            types=",".join(_cmd_types) if _cmd_types else "none",
+        )
+
+    factory = getattr(request.app.state, "adapter_factory", None)
+    if factory is None:
+        from ...agents.factory import create_default_factory
+
+        factory = create_default_factory()
+
+    async def run(controller: RunController) -> None:
+        # Seed controller.state from initial_state (create_run already does this,
+        # but ensure the proxy reflects the generated sessionId).
+        try:
+            if controller.state is None:
+                controller.state = initial_state  # type: ignore[assignment]
+            else:
+                # Root-cause fix (same-tab reload reused nothing): ALWAYS emit the
+                # authoritative sessionId as a state op. create_run only seeds the
+                # SERVER-side manager with initial_state, so the previous equality
+                # guard compared the manager's value against itself and the minted
+                # id never reached the wire. The client's state accumulator seeds
+                # from ITS OWN initialState (per-tab sessionStorage may be empty),
+                # so the resolved id must be STREAMED for SessionIdStorageSync to
+                # persist it. The client-side storage write dedupes by value, so
+                # reuse runs are no-ops there.
+                controller.state["sessionId"] = session_key  # type: ignore[index]
+        except Exception:
+            pass
+
+        if not prepared_commands:
+            _set_status(controller, "ready")
+            controller.flush()
+            return
+
+        # Command-order policy (enforced in prepare_validated_commands before
+        # streaming): capability-only and add-message-only batches are allowed; zero
+        # or more capability commands followed by one or more add-message commands are
+        # allowed (capability changes affect this prompt); any capability command
+        # after the first add-message is rejected with HTTP 400 unsupported_command_order.
+        # The single in-order pass below applies each command exactly once, in order.
+        # One long-lived adapter + per-session turn lock serialize the whole batch
+        # (no race with an active run). get_or_create_adapter performs per-session
+        # SINGLE-FLIGHT creation: it does NOT hold the registry lock during
+        # adapter.start(), so a slow OpenCode startup on one session never blocks
+        # creation or requests for another.
+        adapter = await get_or_create_adapter(
+            session_key,
+            factory=factory,
+            state=initial_state,
+            config=parsed.config,
+        )
+        # Transport has obtained a usable adapter; the frontend gate can open.
+        _diag_record(adapter, EVENT["TRANSPORT_READY"], "info")
+        _diag_record(adapter, EVENT["ADAPTER_READY"], "info")
+        _diag_project(controller, adapter)
+        # Update idle activity when the entry is obtained for a request
+        touch_session(session_key)
+        entry = get_entry(session_key)
+        if entry is not None:
+            await entry.lock.acquire()
+            # Update activity when turn starts
+            touch_session(session_key)
+
+        try:
+            projector = AcpStateProjector(controller, session_key=session_key)
+            prompt_task: asyncio.Task[None] | None = None
+            cancel_task: asyncio.Task[bool] | None = None
+            cancelled = False
+
+            # Single in-order pass over the prepared command list. The command order is
+            # already enforced upstream in prepare_validated_commands: any capability
+            # command appearing after the first add-message was rejected with HTTP 400
+            # unsupported_command_order before streaming, so here capability commands
+            # always precede add-message commands and take effect on this prompt. The
+            # list is processed exactly once, in order — never reordered, deferred,
+            # duplicated, or dropped. A capability-only batch is finalized as ready
+            # after projecting the authoritative snapshot.
+            raw_blocks: list[dict[str, Any]] = []
+            has_add_message = False
+            for cmd in prepared_commands:
+                if not isinstance(cmd, dict):
+                    continue
+                ctype = str(cmd.get("type", ""))
+                if ctype == "add-message":
+                    has_add_message = True
+                    # The frontend submitted a prompt command over the official queue.
+                    _diag_record(adapter, EVENT["PROMPT_COMMAND_RECEIVED"], "info")
+                    _diag_project(controller, adapter)
+                    message = cmd["message"]  # validated, stable id already present
+                    parent_id = cmd.get("parentId")
+                    if isinstance(parent_id, str) and parent_id:
+                        # Truncate after parent (validated to exist in simulation)
+                        try:
+                            # Operate on the CURRENT authoritative message list.
+                            # controller.state["messages"] is a StateProxy; iterating it
+                            # yields the underlying plain JSON message dicts (the package's
+                            # documented public snapshot: StateProxy.__iter__ ->
+                            # iter(self._get_value())). Parent lookup AND truncation use this
+                            # SAME current snapshot, so a later add-message command in the
+                            # same request (which appends before this loop re-reads state)
+                            # is found. No proxy attribute duck-typing (hasattr) and no stale
+                            # request-time initial_state.
+                            current_messages = list(controller.state["messages"])  # type: ignore[index]
+                            parent_idx = _find_parent_index(current_messages, parent_id)
+                            if parent_idx is None:
+                                # Validated pre-stream, but the live list may have been
+                                # mutated by an earlier command in this same request; treat
+                                # as a stream error rather than silently dropping the prompt.
+                                _set_status(controller, "error", error="parent_not_found")
+                                with contextlib.suppress(Exception):
+                                    controller.add_error("parent_not_found")
+                                controller.flush()
+                                return
+                            # Keep exactly the parent ancestry; later turns are dropped.
+                            truncated = current_messages[: parent_idx + 1]
+                            controller.state["messages"] = truncated  # type: ignore[index]
+                        except Exception:
+                            _set_status(controller, "error", error="parent_truncate_failed")
+                            with contextlib.suppress(Exception):
+                                controller.add_error("parent_truncate_failed")
+                            controller.flush()
+                            return
+                    try:
+                        controller.state["messages"].append(message)  # type: ignore[attr-defined,index]
+                    except Exception:
+                        try:
+                            msgs = controller.state["messages"]  # type: ignore[index]
+                            msgs.append(message)  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    parts = message.get("parts") if isinstance(message, dict) else None
+                    if isinstance(parts, list):
+                        for part in parts:
+                            if not isinstance(part, dict):
+                                continue
+                            ptype = part.get("type")
+                            if ptype == "text":
+                                t = part.get("text")
+                                if isinstance(t, str) and t:
+                                    raw_blocks.append(
+                                        {"kind": "text", "name": "message", "text": t}
+                                    )
+                            elif ptype == "image":
+                                data_url = part.get("image")
+                                if isinstance(data_url, str) and data_url.startswith("data:"):
+                                    # Shared strict parser: enforces the exact
+                                    # data:<mime>;base64,<payload> grammar, the
+                                    # explicit image MIME allowlist, and strict
+                                    # base64. Pre-stream validation already rejects
+                                    # malformed parts with HTTP 400, so this is a
+                                    # defensive guard only.
+                                    try:
+                                        mime, b64 = parse_inline_data_url(data_url)
+                                    except PromptValidationError:
+                                        continue
+                                    name = part.get("filename") or "image"
+                                    raw_blocks.append(
+                                        {
+                                            "kind": "image",
+                                            "name": name,
+                                            "mime_type": mime,
+                                            "data_base64": b64,
+                                        }
+                                    )
+                elif ctype.startswith("rtai."):
+                    # Authoritative, sequential, no optimistic claim. Applied before the
+                    # prompt so selection/refresh affects this turn.
+                    await _apply_capability_command(controller, adapter, cmd, session_key)
+
+            if not has_add_message or not raw_blocks:
+                # Capability-only batch (or empty message): finalize ready with the
+                # projected capability state already written to controller.state.
+                _diag_project(controller, adapter)
+                _set_status(controller, "ready")
+                controller.flush()
+                if logger.isEnabledFor(logging.DEBUG):
+                    log_event(
+                        logger,
+                        logging.DEBUG,
+                        "assistant_state_flushed",
+                        session=short_id(session_key),
+                        status="ready",
+                        capability_only=not has_add_message,
+                    )
+                return
+
+            _ensure_assistant_message(controller)
+            _diag_project(controller, adapter)
+            _set_status(controller, "running")
+            controller.flush()
+            if logger.isEnabledFor(logging.DEBUG):
+                log_event(
+                    logger,
+                    logging.DEBUG,
+                    "assistant_state_flushed",
+                    session=short_id(session_key),
+                    status="running",
+                    capability_only=False,
+                )
+
+            # Bind projector to the stable dispatch while holding the lock (prompt path only)
+            if entry is not None:
+                entry.dispatch.bind(projector)
+
+            try:
+                log_event(
+                    logger,
+                    logging.DEBUG,
+                    "assistant_prompt_entered",
+                    session=short_id(session_key),
+                )
+
+                async def _do_prompt() -> None:
+                    await submit_prompt_blocks(adapter, raw_blocks)
+
+                prompt_task = asyncio.create_task(_do_prompt())
+                cancel_task = asyncio.create_task(controller.cancelled_event.wait())
+
+                done, pending = await asyncio.wait(
+                    {prompt_task, cancel_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if prompt_task in done:
+                    # Prompt finished first — consume result normally
+                    cancel_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await cancel_task
+                    try:
+                        prompt_task.result()
+                    except asyncio.CancelledError:
+                        cancelled = True
+                        _set_status(controller, "cancelled")
+                    except Exception as exc:
+                        _set_status(controller, "error", error=type(exc).__name__)
+                        with contextlib.suppress(Exception):
+                            controller.add_error(type(exc).__name__)
+                        log_event(
+                            logger,
+                            logging.ERROR,
+                            "assistant_prompt_failed",
+                            session=short_id(session_key),
+                            error=type(exc).__name__,
+                        )
+                    else:
+                        if not cancelled and not controller.is_cancelled:
+                            try:
+                                if (
+                                    controller.state is not None
+                                    and controller.state["status"] == "running"
+                                ):  # type: ignore[index]
+                                    _set_status(controller, "complete")
+                            except Exception:
+                                _set_status(controller, "complete")
+                        log_event(
+                            logger,
+                            logging.DEBUG,
+                            "assistant_prompt_returned",
+                            session=short_id(session_key),
+                        )
+                else:
+                    # Cancellation finished first
+                    cancelled = True
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "assistant_cancel_observed",
+                        session=short_id(session_key),
+                    )
+                    try:
+                        await adapter.cancel()
+                    except Exception:
+                        log_event(logger, logging.WARNING, "assistant_cancel_failed")
+                    prompt_task.cancel()
+                    try:
+                        await prompt_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:
+                        _set_status(controller, "error", error=type(exc).__name__)
+                    _set_status(controller, "cancelled")
+                    # Ensure cancel_task is done
+                    cancel_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await cancel_task
+
+                try:
+                    controller.flush()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        _diag_record(adapter, EVENT["STATE_FLUSH_FAILED"], "error")
+                    _diag_project(controller, adapter)
+            except asyncio.CancelledError:
+                # Run callback itself was cancelled (client disconnect)
+                cancelled = True
+                with contextlib.suppress(Exception):
+                    await adapter.cancel()
+                _set_status(controller, "cancelled")
+                controller.flush()
+                raise
+        finally:
+            # Update activity when turn finishes
+            with contextlib.suppress(Exception):
+                touch_session(session_key)
+            if entry is not None:
+                # Serialize turn cleanup with in-flight permission responses via the
+                # dedicated permission lock. The turn lock (entry.lock) is already
+                # held here and is released AFTER the permission lock, preserving the
+                # required order: entry.lock first, then permission_lock (reverse on release).
+                async with entry.permission_lock:
+                    entry.dispatch.unbind(projector)
+                    # Drop permission metadata for this turn; the resolved approval
+                    # state already lives in controller.state (streamed to the UI).
+                    entry.dispatch.clear_permissions()
+                entry.lock.release()
+            # Always cancel/await the temporary cancel_task
+            if cancel_task is not None and not cancel_task.done():
+                cancel_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await cancel_task
+            if prompt_task is not None and not prompt_task.done():
+                prompt_task.cancel()
+                try:
+                    await prompt_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+            log_event(
+                logger,
+                logging.DEBUG,
+                "assistant_turn_finalized",
+                session=short_id(session_key),
+                cancelled=cancelled,
+            )
+
+    return DataStreamResponse(create_run(run, state=initial_state))
+
+
+@router.delete("/assistant/sessions/{session_id}")
+async def delete_assistant_session(session_id: str) -> Response:
+    """Application session lifecycle: close the backend AssistantTransport session.
+
+    Idempotent: returns 204 when closed or already absent. Does not expose
+    adapter/process internals. Not a streaming protocol.
+    """
+    # Decode is handled by FastAPI path param; ensure non-empty
+    if not session_id or not session_id.strip():
+        return Response(status_code=204)
+    sid = session_id.strip()
+    try:
+        await close_session(sid)
+    except Exception as exc:
+        # Honest 5xx on failure; log only short id, class and lifecycle stage
+        log_event(
+            logger,
+            logging.ERROR,
+            "assistant_session_close_failed",
+            session=short_id(sid),
+            error=type(exc).__name__,
+        )
+        raise HTTPException(status_code=500, detail={"error": "close_failed"}) from None
+    return Response(status_code=204)
+
+
+async def _apply_capability_command(
+    controller: RunController,
+    adapter: Any,
+    cmd: dict[str, Any],
+    session_key: str,
+) -> None:
+    """Apply one validated RTAI capability custom command authoritatively.
+
+    Uses only the adapter's public ``capability_snapshot()`` / ``select()``
+    contract. A successful selection refreshes and projects the authoritative
+    server snapshot (never an optimistic claim). An adapter rejection preserves
+    the prior server-selected value and exposes a safe transport error that does
+    not leak the submitted payload.
+    """
+    ctype = cmd.get("type")
+    if ctype == RTAI_CLIENT_DIAGNOSTIC_COMMAND:
+        # Validated client diagnostic: record into the same per-session recorder
+        # and project immediately. Non-mutating; never affects selection/prompt.
+        _record_client_diagnostic(controller, adapter, cmd)
+        return
+    log_event(
+        logger,
+        logging.DEBUG,
+        "assistant_capability_command",
+        session=short_id(session_key),
+        type=str(cmd.get("type")),
+    )
+    if ctype == RTAI_REFRESH_COMMAND:
+        # The frontend issued a capability refresh over the official command queue.
+        _diag_record(adapter, EVENT["TRANSPORT_COMMAND_RECEIVED"], "info", kind="refresh")
+        _diag_project(controller, adapter)
+        try:
+            snapshot = adapter.capability_snapshot()
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "assistant_capability_snapshot",
+                session=short_id(session_key),
+                success=False,
+                error=type(exc).__name__,
+            )
+            # Controlled failure: do NOT project a capability state and do NOT raise,
+            # so the command completes and the frontend's one-shot bootstrap detects
+            # the dropped refresh and offers Retry (never a permanent spinner). The
+            # reason is recorded safely in diagnostics for the Diagnostics panel.
+            _diag_record(adapter, EVENT["CAPABILITY_REFRESH_FAILED"], "error", reason=type(exc).__name__)
+            _diag_project(controller, adapter)
+            return
+        _diag_record(adapter, EVENT["CAPABILITY_SNAPSHOT_RECEIVED"], "info")
+        project_capabilities(controller, snapshot, recorder=getattr(adapter, "diag", None))
+        _diag_project(controller, adapter)
+        return
+    kind = RTAI_SELECT_COMMANDS.get(ctype)
+    if kind is None:
+        return
+    value = cmd.get("value")
+    _diag_record(adapter, EVENT["TRANSPORT_COMMAND_RECEIVED"], "info", kind=kind)
+    _diag_project(controller, adapter)
+    try:
+        result = await adapter.select(kind, value)
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "assistant_capability_select_failed",
+            session=short_id(session_key),
+            kind=kind,
+            error=type(exc).__name__,
+        )
+        set_capability_error(controller, kind, "Selection could not be applied.")
+        _diag_record(adapter, EVENT["TRANSPORT_COMMAND_ERROR"], "warn", kind=kind)
+        _diag_project(controller, adapter)
+        return
+    if result.applied:
+        project_capabilities(controller, adapter.capability_snapshot(), recorder=getattr(adapter, "diag", None))
+    else:
+        # Preserve prior server-selected value; expose a safe, payload-free error.
+        set_capability_error(controller, kind, "Selection could not be applied.")
+        _diag_record(adapter, EVENT["TRANSPORT_COMMAND_ERROR"], "warn", kind=kind)
+    _diag_project(controller, adapter)
+    return
+
+
+class PermissionResponseRequest(BaseModel):
+    """Strict body for the permission-response endpoint.
+
+    Only ``optionId`` (non-empty, bounded) is accepted; aliases (option_id,
+    option, choice, result) and extra fields are rejected. ACP option IDs are
+    exact, so the original value is returned unchanged (never trimmed or
+    normalized). FastAPI validates this model and returns **422** for
+    malformed/blank/oversized/alias/extra-field bodies; a well-formed
+    ``optionId`` that is not one of the permission's registered options is
+    rejected by the handler with **400**.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    optionId: str = Field(min_length=1, max_length=256)
+
+    @field_validator("optionId")
+    @classmethod
+    def _check_not_blank(cls, value: str) -> str:
+        # Reject whitespace-only without altering valid IDs; return the original
+        # value byte-for-byte so ACP option IDs remain unchanged.
+        if value.strip() == "":
+            raise ValueError("optionId must not be blank")
+        return value
+
+
+@router.post("/assistant/sessions/{session_id}/permissions/{permission_id}")
+async def respond_assistant_permission(
+    session_id: str,
+    permission_id: str,
+    payload: PermissionResponseRequest,
+) -> Response:
+    """Resolve a pending ACP permission while the original AssistantTransport stream stays open.
+
+    This endpoint does NOT acquire the per-turn lock (the active prompt owns it
+    while blocked on the ACP permission future). It calls the adapter's public
+    ``respond_to_permission`` concurrently to unblock the future, then records and
+    projects the resolution. It never routes through the AssistantTransport command queue.
+
+    Request validation is delegated to ``PermissionResponseRequest``: FastAPI
+    returns **422** for malformed/blank/oversized/alias/extra-field bodies, and
+    this handler returns **400** only when a well-formed ``optionId`` is not one
+    of the permission's registered options.
+    """
+    if not session_id or not session_id.strip():
+        raise HTTPException(status_code=400, detail={"error": "invalid_session_id"})
+    sid = session_id.strip()
+    if not permission_id or not permission_id.strip():
+        raise HTTPException(status_code=400, detail={"error": "invalid_permission_id"})
+    pid = permission_id.strip()
+
+    # The body is already validated by FastAPI (422 on failure). Use the original,
+    # untrimmed value so ACP option IDs are compared byte-for-byte.
+    option_id = payload.optionId
+
+    # Read-only session lookup; do NOT acquire the per-turn lock.
+    entry = get_entry_any(sid)
+    if entry is not None and getattr(entry, "diagnostics", None) is not None:
+        with contextlib.suppress(Exception):
+            entry.diagnostics.record(EVENT["PERMISSION_RESPONSE_RECEIVED"], "info")
+    if entry is None:
+        raise HTTPException(status_code=404, detail={"error": "unknown_session"})
+    if entry.state in ("closing", "closed", "close_failed"):
+        raise HTTPException(status_code=409, detail={"error": "session_closing"})
+
+    # Permission-resolution critical section. The dedicated permission lock
+    # serializes this sequence against the run() finally cleanup (which acquires
+    # the same lock before unbinding the projector and clearing permissions) so an
+    # accepted resolution is always recorded and projected before turn cleanup can
+    # erase it. The turn lock is NOT acquired here (it is owned by the active
+    # prompt) so there is no deadlock with the in-flight permission response.
+    async with entry.permission_lock:
+        perm = entry.dispatch.permissions.get(pid)
+        if perm is None:
+            raise HTTPException(status_code=404, detail={"error": "unknown_permission"})
+
+        # Already expired/inactive: never retryable.
+        if perm.resolution == "expired":
+            raise HTTPException(status_code=409, detail={"error": "permission_not_active"})
+
+        # Already resolved: identical retry → 204; different option → 409.
+        if perm.resolution == "resolved":
+            if perm.selected_option_id == option_id:
+                return Response(status_code=204)
+            raise HTTPException(status_code=409, detail={"error": "permission_already_resolved"})
+
+        # Unsupported: no selectable options. No optionId can be submitted.
+        if not perm.option_kinds:
+            raise HTTPException(status_code=409, detail={"error": "unsupported_permission_options"})
+
+        if option_id not in perm.option_kinds:
+            raise HTTPException(status_code=400, detail={"error": "invalid_option"})
+
+        # Resolve the ACP pending future concurrently (no turn lock held here).
+        try:
+            ok = await entry.adapter.respond_to_permission(pid, option_id)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "assistant_permission_adapter_failed",
+                session=short_id(sid),
+                permission=short_id(pid),
+                error=type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=500, detail={"error": "permission_response_failed"}
+            ) from None
+
+        # False: future missing/completed/inactive. Mark expired (not retryable)
+        # and project the terminal approval state; never ask the frontend to retry.
+        if not ok:
+            entry.dispatch.permissions.mark_expired(pid)
+            entry.dispatch.set_approval_expired(pid, _EXPIRED_REASON)
+            log_event(
+                logger,
+                logging.WARNING,
+                "assistant_permission_not_active",
+                session=short_id(sid),
+                permission=short_id(pid),
+            )
+            raise HTTPException(status_code=409, detail={"error": "permission_not_active"})
+
+        # ACP accepted the option. Record the resolution in the session registry.
+        entry.dispatch.permissions.resolve(pid, option_id)
+        kind = perm.option_kinds.get(option_id, "")
+        approved = kind in ("allow-once", "allow-always")
+        # Project only if the projector is still bound; otherwise the next ACP
+        # event (tool_result/done) re-synchronizes the stored resolution.
+        applied = entry.dispatch.set_approval_resolved(pid, option_id, approved)
+        if not applied:
+            log_event(
+                logger,
+                logging.WARNING,
+                "assistant_permission_state_deferred",
+                session=short_id(sid),
+                permission=short_id(pid),
+            )
+        # 204: ACP already accepted; never ask the frontend to retry an accepted option.
+        return Response(status_code=204)

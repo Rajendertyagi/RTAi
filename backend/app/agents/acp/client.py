@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ...core.protocol import jsonable_model
 from ...logging_config import log_event, short_id
 from .mapping import permission_option, permission_tool_details, tool_call_id_of
+from ...diagnostics import EVENT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .session import AcpSession
@@ -50,31 +51,61 @@ def create_client_class() -> type:
             fut = asyncio.get_event_loop().create_future()
             owner._pending_permissions[perm_id] = fut
 
-            await owner._send(
-                {
-                    "type": "permission_request",
-                    "permission_request_id": perm_id,
-                    "tool_call_id": tool_call_id_of(tool_call, f"tc-{perm_id}"),
-                    "options": [
-                        permission_option(o, i) for i, o in enumerate(options)
-                    ],
-                    **permission_tool_details(tool_call),
-                }
-            )
-            log_event(
-                logger,
-                logging.INFO,
-                "acp_permission_request",
-                permission=short_id(perm_id),
-            )
             try:
-                option_id = await asyncio.wait_for(fut, timeout=300.0)
+                # Correlation key is the REAL ACP tool call id ONLY. We must never
+                # fall back to a "last tool call" correlation: it is unsafe under
+                # concurrent/interleaved tool calls and previously spawned duplicate
+                # approval cards. If ACP hands no usable tool call id, this is a
+                # protocol anomaly: log it, show one safe non-actionable card, and
+                # resolve/cancel honestly - never attach the approval to an arbitrary
+                # tool part.
+                tool_call_id = tool_call_id_of(tool_call, None)
+                has_tool_call_id = isinstance(tool_call_id, str) and bool(tool_call_id)
+                # Skip protocol-invalid options (no official optionId) instead of
+                # inventing a positional or label-derived id.
+                mapped_options = [
+                    item
+                    for item in (permission_option(o) for o in options)
+                    if item is not None
+                ]
+                if has_tool_call_id:
+                    approval_options = mapped_options
+                else:
+                    # No usable tool call id: render one safe, non-actionable card
+                    # (no selectable options) keyed by a PERMISSION-derived id
+                    # (clearly not a tool id); resolve honestly on teardown.
+                    tool_call_id = f"perm-{perm_id}"
+                    approval_options = []
+                    owner._record_diag(
+                        EVENT["PERMISSION_PROTOCOL_ERROR"],
+                        "warn",
+                    )
+
+                await owner._send(
+                    {
+                        "type": "permission_request",
+                        "permission_request_id": perm_id,
+                        "tool_call_id": tool_call_id,
+                        "options": approval_options,
+                        **permission_tool_details(tool_call),
+                    }
+                )
+                owner._record_diag(
+                    EVENT["PERMISSION_RECEIVED"],
+                    "info",
+                    has_tool_call_id=has_tool_call_id,
+                )
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "acp_permission_request",
+                    permission=short_id(perm_id),
+                )
+                option_id = await fut
                 # ACP RequestPermissionResponse is a discriminated union:
                 # selected + optionId, or cancelled. Anything else fails
                 # pydantic validation on the agent side and reads as reject.
                 return {"outcome": {"outcome": "selected", "optionId": option_id}}
-            except asyncio.TimeoutError:
-                return {"outcome": {"outcome": "cancelled"}}
             finally:
                 owner._pending_permissions.pop(perm_id, None)
 

@@ -1,11 +1,21 @@
 "use client";
 
-import { ThreadPrimitive, AuiIf } from "@assistant-ui/react";
-import { useEffect, useRef } from "react";
-import { useChatStore } from "../state/chatStore";
+import { ThreadPrimitive, SuggestionPrimitive, AuiIf } from "@assistant-ui/react";
+import { useRtaiAssistantState } from "@/hooks/useRtaiAssistantState";
+import { useEffect, useRef, type RefObject } from "react";
+import { Menu } from "lucide-react";
+
+
 import { MessageItem } from "./Message";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
+import { SHARED_CONTENT_COLUMN } from "../lib/shellLayout";
+
+export interface ChatScreenProps {
+  drawerOpen: boolean;
+  onMenuClick: () => void;
+  menuButtonRef: RefObject<HTMLButtonElement | null>;
+}
 
 // Auto-scroll to bottom when new messages arrive
 function useAutoScroll() {
@@ -30,60 +40,121 @@ function useAutoScroll() {
   return scrollRef;
 }
 
-export function ChatScreen() {
+export function ChatScreen({
+  drawerOpen,
+  onMenuClick,
+  menuButtonRef,
+}: ChatScreenProps) {
   const scrollRef = useAutoScroll();
-  const isConnected = useChatStore((s) => s.connected);
-  const agentInfo = useChatStore((s) => s.agentInfo);
+  // Transport-derived status indicator (not WebSocket connected)
+  const status = useRtaiAssistantState((s) => s.status, "ready");
+  const agentInfo = "OpenCode";
 
   return (
-    // `h-full` (not `h-screen`) fills the parent <main>, and we deliberately do
-    // NOT reuse the top-level `.app` row class here ╬ô├ç├╢ that collision was part of
-    // the earlier broken layout.
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header */}
-      <header className="app__header flex h-14 shrink-0 items-center border-b border-[var(--interactive-border)] bg-[var(--surface-background)] px-4">
+      <header className="flex h-12 shrink-0 items-center border-b border-interactive bg-surface-background px-4">
+        <button
+          type="button"
+          ref={menuButtonRef}
+          onClick={onMenuClick}
+          aria-expanded={drawerOpen}
+          aria-controls="app-sidebar"
+          aria-label="Open navigation menu"
+          className="md:hidden mr-2 flex items-center justify-center w-8 h-8 max-md:h-11 max-md:w-11 rounded-lg border border-border bg-transparent text-foreground cursor-pointer transition-colors hover:bg-interactive-hover"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
         <div className="flex items-center gap-2">
-          <span className="text-lg font-medium text-[var(--foreground)]">RTAI</span>
+          <span className="text-lg font-medium text-foreground">RTAI</span>
           <span
-            className={`h-2 w-2 rounded-full ${isConnected ? "bg-[var(--status-success)]" : "bg-[var(--status-error)]"}`}
-            aria-label={isConnected ? "Connected" : "Disconnected"}
+            className={`h-2 w-2 rounded-full ${
+              status === "running"
+                ? "bg-status-warning animate-pulse"
+                : status === "error"
+                  ? "bg-status-error"
+                  : status === "complete"
+                    ? "bg-status-success"
+                    : status === "cancelled"
+                      ? "bg-muted-foreground"
+                      : "bg-border"
+            }`}
+            aria-label={
+              status === "running"
+                ? "Running"
+                : status === "error"
+                  ? "Error"
+                  : status === "complete"
+                    ? "Complete"
+                    : status === "cancelled"
+                      ? "Cancelled"
+                      : "Ready"
+            }
           />
         </div>
-        <div className="ml-auto flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
-          <span>{agentInfo || "Agent"}</span>
+        <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+          <span>{agentInfo}</span>
         </div>
       </header>
 
       {/* Main chat area */}
-      <div className="app__main flex min-h-0 flex-1 overflow-hidden">
-        <ThreadPrimitive.Root className="flex h-full flex-col">
-          <ThreadPrimitive.Viewport
-            ref={scrollRef}
-            className="chat__messages flex-1 overflow-y-auto px-4 py-6"
-          >
-            <AuiIf condition={(s) => s.thread.isEmpty}>
-              <div className="empty-state mx-auto max-w-md text-center">
-                <h1 className="text-2xl font-normal text-[var(--foreground)]">
-                  How can I help?
-                </h1>
-                <p className="mt-2 text-sm text-[var(--muted-foreground)]">
-                  Start a conversation with the AI assistant
-                </p>
+      <ThreadPrimitive.Root className="flex min-h-0 min-w-0 w-full flex-1 flex-col">
+        <ThreadPrimitive.Viewport
+          ref={scrollRef}
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+        >
+          <AuiIf condition={(s) => s.thread.isEmpty}>
+            <div
+              className={`${SHARED_CONTENT_COLUMN} flex min-h-0 flex-1 flex-col items-center justify-center text-center py-8`}
+            >
+              <h1 className="text-2xl font-normal text-foreground">
+                What are we working on?
+              </h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Start a conversation with the AI assistant
+              </p>
+              {/* Suggestion cards */}
+              <div className="mt-6 grid w-full max-w-lg grid-cols-2 gap-2">
+                <ThreadPrimitive.Suggestions>
+                  {() => (
+                    <SuggestionPrimitive.Trigger
+                      send={false}
+                      clearComposer={true}
+                      className="flex flex-col items-start gap-1 rounded-xl border border-interactive bg-surface-elevated px-4 py-3 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-interactive-focus-ring"
+                    >
+                      <span className="font-medium text-sm text-foreground">
+                        <SuggestionPrimitive.Title />
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        <SuggestionPrimitive.Description />
+                      </span>
+                    </SuggestionPrimitive.Trigger>
+                  )}
+                </ThreadPrimitive.Suggestions>
               </div>
-            </AuiIf>
+            </div>
+          </AuiIf>
 
+          <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
             <ThreadPrimitive.Messages>
               {({ message }) => <MessageItem message={message} />}
             </ThreadPrimitive.Messages>
-          </ThreadPrimitive.Viewport>
+          </div>
 
-          {/* Persistent status bar */}
-          <StatusBar />
+          <ThreadPrimitive.ViewportFooter
+            className="sticky bottom-0 z-10 mt-auto w-full min-w-0 bg-background"
+            data-testid="thread-viewport-footer"
+          >
+            <div className={`${SHARED_CONTENT_COLUMN} min-w-0`}>
+              {/* Persistent status bar */}
+              <StatusBar />
 
-          {/* Composer card */}
-          <Composer />
-        </ThreadPrimitive.Root>
-      </div>
+              {/* Composer card */}
+              <Composer />
+            </div>
+          </ThreadPrimitive.ViewportFooter>
+        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Root>
     </div>
   );
 }

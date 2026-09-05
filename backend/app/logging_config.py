@@ -9,7 +9,7 @@ line per record::
 
 Privacy contract: application code must never log prompt text, assistant
 deltas, file contents, tool arguments/results, permission contents, raw
-SSE/WebSocket payloads, auth headers, cookies, credentials, environment
+streaming payloads, auth headers, cookies, credentials, environment
 variable contents, or complete capability payloads.  This module provides
 ``short_id`` for safe correlation aliases and ``log_event`` for stable
 event names; exception messages are treated as sensitive and logged only

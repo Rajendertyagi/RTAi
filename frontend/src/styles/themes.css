@@ -1,0 +1,243 @@
+/* ============================================================
+   RTAI Semantic Theme Tokens
+   Tailwind v4 @theme inline mappings for all semantic colors.
+   Components use these utilities instead of raw var(--...) refs.
+   ============================================================ */
+
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* Core Palette */
+    --background: oklch(0.97 0.02 85);
+    --foreground: oklch(0.25 0.02 40);
+    --card: oklch(0.99 0.01 90);
+    --card-foreground: oklch(0.25 0.02 40);
+    --popover: oklch(0.99 0.01 90);
+    --popover-foreground: oklch(0.25 0.02 40);
+    --primary: oklch(0.65 0.2 55);
+    --primary-foreground: oklch(0.99 0.01 90);
+    --secondary: oklch(0.92 0.02 80);
+    --secondary-foreground: oklch(0.25 0.02 40);
+    --muted: oklch(0.9 0.015 75);
+    --muted-foreground: oklch(0.45 0.02 50);
+    --accent: oklch(0.92 0.02 80);
+    --accent-foreground: oklch(0.25 0.02 40);
+    --destructive: oklch(0.55 0.25 25);
+    --destructive-foreground: oklch(0.99 0.01 90);
+    --border: oklch(0.85 0.02 70);
+    --input: oklch(0.88 0.02 75);
+    --ring: oklch(0.65 0.2 55);
+    --radius: 0.5625rem;
+
+    /* Sidebar */
+    --sidebar-width: 260px;
+    --sidebar: oklch(0.94 0.015 80);
+    --sidebar-foreground: oklch(0.25 0.02 40);
+
+    /* Semantic Surfaces */
+    --surface-background: var(--background);
+    --surface-foreground: var(--foreground);
+    --surface-muted: var(--muted);
+    --surface-muted-foreground: var(--muted-foreground);
+    --surface-elevated: var(--card);
+    --surface-elevated-foreground: var(--card-foreground);
+    --surface-overlay: var(--popover);
+    --surface-subtle: var(--secondary);
+
+    /* Interactive */
+    --interactive-border: var(--border);
+    --interactive-border-hover: oklch(0.75 0.02 60);
+    --interactive-border-focus: var(--ring);
+    --interactive-hover: color-mix(in srgb, var(--primary) 10%, transparent);
+    --interactive-active: color-mix(in srgb, var(--primary) 20%, transparent);
+    --interactive-focus-ring: color-mix(in srgb, var(--primary) 50%, transparent);
+
+    /* Status */
+    --status-success: oklch(0.58 0.15 145);
+    --status-success-foreground: oklch(0.99 0.01 90);
+    --status-success-background: color-mix(in srgb, var(--status-success) 15%, transparent);
+    --status-warning: oklch(0.75 0.18 85);
+    --status-warning-foreground: oklch(0.25 0.02 40);
+    --status-warning-background: color-mix(in srgb, var(--status-warning) 15%, transparent);
+    --status-error: oklch(0.58 0.22 25);
+    --status-error-foreground: oklch(0.99 0.01 90);
+    --status-error-background: color-mix(in srgb, var(--status-error) 15%, transparent);
+    --status-info: oklch(0.62 0.18 230);
+    --status-info-foreground: oklch(0.99 0.01 90);
+    --status-info-background: color-mix(in srgb, var(--status-info) 15%, transparent);
+
+    /* Tools */
+    --tools-background: color-mix(in srgb, var(--surface-muted) 30%, transparent);
+    --tools-border: color-mix(in srgb, var(--interactive-border) 60%, transparent);
+    --tools-header-hover: color-mix(in srgb, var(--surface-muted) 50%, transparent);
+    --tools-icon: var(--surface-muted-foreground);
+    --tools-title: var(--surface-foreground);
+    --tools-description: color-mix(in srgb, var(--surface-muted-foreground) 60%, transparent);
+
+    /* Chat */
+    --chat-user-message-bg: color-mix(in srgb, var(--primary) 12%, transparent);
+    --chat-assistant-message: var(--surface-foreground);
+    --chat-assistant-message-bg: var(--surface-background);
+
+    /* Markdown */
+    --markdown-heading1: var(--primary);
+    --markdown-link: color-mix(in srgb, var(--status-info) 90%, var(--primary));
+    --markdown-link-hover: var(--status-info);
+    --markdown-list-marker: color-mix(in srgb, var(--status-success) 60%, transparent);
+    --markdown-inline-code: var(--status-success);
+    --markdown-inline-code-bg: color-mix(in srgb, var(--surface-muted) 80%, transparent);
+    --markdown-blockquote: var(--surface-muted-foreground);
+    --markdown-blockquote-border: var(--interactive-border);
+
+    /* Syntax */
+    --syntax-comment: oklch(0.55 0.02 120);
+    --syntax-keyword: oklch(0.58 0.18 30);
+    --syntax-string: oklch(0.65 0.18 25);
+    --syntax-number: oklch(0.62 0.15 200);
+    --syntax-function: oklch(0.6 0.15 130);
+    --syntax-variable: oklch(0.65 0.15 50);
+    --syntax-type: oklch(0.58 0.15 240);
+    --syntax-operator: oklch(0.55 0.2 10);
+    --syntax-foreground: var(--surface-foreground);
+
+    /* Typography */
+    --text-markdown: 0.9375rem;
+    --text-code: 0.8125rem;
+    --text-meta: 0.875rem;
+    --text-micro: 0.8125rem;
+
+    /* Fonts */
+    --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Cascadia Mono, "Segoe UI Mono", monospace;
+  }
+
+  [data-theme="dark"] {
+    color-scheme: dark;
+
+    --background: oklch(0.16 0.01 30);
+    --foreground: oklch(0.85 0.02 90);
+    --card: oklch(0.19 0.01 40);
+    --card-foreground: oklch(0.85 0.02 90);
+    --popover: oklch(0.24 0.01 40);
+    --popover-foreground: oklch(0.85 0.02 90);
+    --primary: oklch(0.77 0.17 85);
+    --primary-foreground: oklch(0.16 0.01 30);
+    --secondary: oklch(0.29 0.01 40);
+    --secondary-foreground: oklch(0.85 0.02 90);
+    --muted: oklch(0.33 0.01 40);
+    --muted-foreground: oklch(0.75 0.02 80);
+    --accent: oklch(0.29 0.01 40);
+    --accent-foreground: oklch(0.85 0.02 90);
+    --destructive: oklch(0.65 0.15 30);
+    --destructive-foreground: oklch(0.9 0.02 80);
+    --border: oklch(0.31 0.01 35);
+    --input: oklch(0.33 0.01 40);
+    --ring: oklch(0.77 0.17 85);
+
+    --surface-muted-foreground: oklch(0.65 0.02 80);
+    --tools-icon: oklch(0.75 0.02 80);
+    --tools-title: oklch(0.85 0.02 90);
+    --tools-description: color-mix(in srgb, oklch(0.65 0.02 80) 70%, transparent);
+    --chat-user-message-bg: color-mix(in srgb, var(--primary) 20%, transparent);
+    --markdown-link: color-mix(in srgb, oklch(0.68 0.12 230) 90%, var(--primary));
+    --syntax-comment: oklch(0.55 0.02 120);
+    --syntax-keyword: oklch(0.68 0.15 30);
+    --syntax-string: oklch(0.72 0.15 25);
+    --syntax-number: oklch(0.7 0.12 200);
+    --syntax-function: oklch(0.68 0.15 130);
+    --syntax-variable: oklch(0.72 0.12 50);
+    --syntax-type: oklch(0.65 0.15 240);
+    --syntax-operator: oklch(0.68 0.18 10);
+
+    --sidebar: oklch(0.18 0.01 40);
+    --sidebar-foreground: oklch(0.85 0.02 90);
+  }
+}
+
+/* Expose semantic tokens as Tailwind theme values via @theme inline.
+   This makes bg-background, text-foreground, border-interactive, etc.
+   available as utility classes throughout the application. */
+@theme inline {
+  /* Core */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  /* Primary / Accent */
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  /* Borders & Rings */
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius: var(--radius);
+
+  /* Sidebar */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --sidebar-width: var(--sidebar-width);
+
+  /* Semantic Surfaces */
+  --color-surface-background: var(--surface-background);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-muted-foreground: var(--surface-muted-foreground);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-elevated-foreground: var(--surface-elevated-foreground);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-subtle: var(--surface-subtle);
+
+  /* Interactive */
+  --color-interactive: var(--interactive-border);
+  --color-interactive-hover: var(--interactive-hover);
+  --color-interactive-active: var(--interactive-active);
+  --color-interactive-focus-ring: var(--interactive-focus-ring);
+
+  /* Status */
+  --color-status-success: var(--status-success);
+  --color-status-success-foreground: var(--status-success-foreground);
+  --color-status-success-background: var(--status-success-background);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-foreground: var(--status-warning-foreground);
+  --color-status-warning-background: var(--status-warning-background);
+  --color-status-error: var(--status-error);
+  --color-status-error-foreground: var(--status-error-foreground);
+  --color-status-error-background: var(--status-error-background);
+  --color-status-info: var(--status-info);
+  --color-status-info-foreground: var(--status-info-foreground);
+  --color-status-info-background: var(--status-info-background);
+
+  /* Tools */
+  --color-tools-background: var(--tools-background);
+  --color-tools-border: var(--tools-border);
+  --color-tools-header-hover: var(--tools-header-hover);
+  --color-tools-icon: var(--tools-icon);
+  --color-tools-title: var(--tools-title);
+  --color-tools-description: var(--tools-description);
+
+  /* Chat */
+  --color-chat-user-message-bg: var(--chat-user-message-bg);
+
+  /* Typography sizes */
+  --text-markdown: var(--text-markdown);
+  --text-code: var(--text-code);
+  --text-meta: var(--text-meta);
+  --text-micro: var(--text-micro);
+
+  /* Fonts */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}

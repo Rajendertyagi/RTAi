@@ -75,6 +75,15 @@ class AttachmentCapabilities:
 
     block_types: tuple[str, ...] = ()
     max_size_bytes: int | None = None  # None = unknown, deliberately not a number
+    # Per-kind support derived from ACP promptCapabilities negotiation.
+    resource_links: bool = True  # baseline per ACP v1 spec
+    images: bool = False
+    audio: bool = False
+    embedded_resources: bool = False
+    # RTAI safety limits (applied regardless of provider limits).
+    max_item_bytes: int = 5 * 1024 * 1024  # 5 MiB per attachment
+    max_total_bytes: int = 10 * 1024 * 1024  # 10 MiB per prompt
+    max_count: int = 10
 
 
 @dataclass(frozen=True)
@@ -114,12 +123,8 @@ class CapabilitySection(Generic[T]):
         return self.unavailable is None and len(self.items) == 0
 
 
-def unavailable_section(
-    reason: UnavailabilityReason, message: str
-) -> CapabilitySection[object]:
+def unavailable_section(reason: UnavailabilityReason, message: str) -> CapabilitySection[object]:
     return CapabilitySection(items=(), unavailable=UnavailableCapability(reason, message))
-
-
 
 
 def _pending_unavailable() -> UnavailableCapability:
@@ -131,6 +136,7 @@ def _pending_unavailable() -> UnavailableCapability:
 
 def _pending_section() -> CapabilitySection[Any]:
     return CapabilitySection(items=(), unavailable=_pending_unavailable())
+
 
 @dataclass(frozen=True)
 class CapabilitySnapshot:
@@ -147,9 +153,10 @@ class CapabilitySnapshot:
     )
     models: CapabilitySection[ModelDescriptor] = field(default_factory=_pending_section)
     modes: CapabilitySection[ModeDescriptor] = field(default_factory=_pending_section)
-    thinking_options: CapabilitySection[ThinkingOption] = field(
-        default_factory=_pending_section
-    )
+    thinking_options: CapabilitySection[ThinkingOption] = field(default_factory=_pending_section)
+    # Current server-selected value per capability kind, mirrored from SelectionKind.
+    # None means no selection is known (distinct from an empty option list).
+    selected: dict[str, str | None] = field(default_factory=dict)
     commands: CapabilitySection[CommandDescriptor] = field(default_factory=_pending_section)
     attachments: AttachmentCapabilities | UnavailableCapability = field(
         default_factory=lambda: UnavailableCapability(
