@@ -274,6 +274,7 @@ export function RtaiToolFallback(props: ToolCallMessagePartProps) {
     return (
       <>
         <ToolFallback key={attemptKey} {...props} respondToApproval={restResponder} />
+        {diffDisplay && <CodeDiff {...diffDisplay} />}
         {bridgeError && (
           <div
             role={bridgeError.kind === "alert" ? "alert" : "status"}
